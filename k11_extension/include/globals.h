@@ -128,6 +128,9 @@ extern void  (*mcuReboot)(void);
 extern void  (*coreBarrier)(void);
 extern void* (*kAlloc)(FcramDescriptor *fcramDesc, u32 nbPages, u32 alignment, u32 region);
 
+extern KThread * (*ContextSwitchFpu)(KThread *kthread);
+extern void * (*SleepThreadInternal)(KThread *kthread, void *unused, s64 ns);
+
 typedef struct ScreenFiltersCfgData {
     u16 cct;
     bool invert;

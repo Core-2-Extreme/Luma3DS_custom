@@ -54,9 +54,20 @@ svcHandler:
         cmp r10, #0
         bne _call_svc_debugged @ returns to _fallback_end*/
 
+        @ We'll enter svc handler.
+        push {r0-r3}
+        mov r0, r9
+        bl enterSvc
+        pop {r0-r3}
+
         cpsie i
         blx r8
         cpsid i
+
+        @ We've finished svc handler.
+        push {r0-r3}
+        bl leaveSvc
+        pop {r0-r3}
 
         ldrb lr, [sp, #0x58+0] @ page end - 0xb8 + 0: scheduling flags
         b _fallback_end

@@ -46,6 +46,8 @@
 #include "task_runner.h"
 #include "plugin.h"
 
+#define MAX_CORES   (u8)(4)
+
 bool isN3DS;
 
 Result __sync_init(void);
@@ -230,6 +232,32 @@ static void handleRestartHbAppNotification(u32 notificationId)
 }
 #endif
 
+static void switchThreadMain(u8 core_id);
+static void switchThreadMain_0(void);
+static void switchThreadMain_1(void);
+static void switchThreadMain_2(void);
+static void switchThreadMain_3(void);
+
+static MyThread switchThread[MAX_CORES] = { 0, };
+static u8 CTR_ALIGN(8) switchThreadStack[MAX_CORES][0x1000] = { 0, };
+static Handle switchThreadEvent[MAX_CORES] = { 0, };
+static void (*switchThreadEntrypoint[MAX_CORES])(void) = { switchThreadMain_0, switchThreadMain_1, switchThreadMain_2, switchThreadMain_3, };
+
+static void switchThreadMain_0(void) { switchThreadMain(0); }
+static void switchThreadMain_1(void) { switchThreadMain(1); }
+static void switchThreadMain_2(void) { switchThreadMain(2); }
+static void switchThreadMain_3(void) { switchThreadMain(3); }
+
+static void switchThreadMain(u8 core_id)
+{
+    svcCreateEvent(&switchThreadEvent[core_id], RESET_ONESHOT);
+
+    //0x00040000 == BETTER_SCHEDULER_START_SCHEDULER.
+    svcKernelSetState(0x00040000, switchThreadEvent[core_id]);
+
+    svcCloseHandle(switchThreadEvent[core_id]);
+}
+
 static const ServiceManagerServiceEntry services[] = {
     { "plg:ldr", 1, PluginLoader__HandleCommands, true },
     { NULL },
@@ -255,6 +283,8 @@ static const ServiceManagerNotificationEntry notifications[] = {
 // Some changes to commit
 int main(void)
 {
+    u8 cores = 0;
+
     Sleep__Init();
     PluginLoader__Init();
 
@@ -271,6 +301,15 @@ int main(void)
     MyThread *errDispThread = errDispCreateThread();
     bootdiagCreateThread();
 
+    cores = (isN3DS ? 4 : 2);
+
+    //Create cross core context switch scheduler threads (1 thread per core).
+    for(u8 i = 0; i < cores; i++)
+    {
+        if(R_FAILED(MyThread_Create(&switchThread[i], switchThreadEntrypoint[i], switchThreadStack[i], sizeof(switchThreadStack[i]), 0, i)))
+            svcBreak(USERBREAK_PANIC);
+    }
+
     if (R_FAILED(ServiceManager_Run(services, notifications, NULL)))
         svcBreak(USERBREAK_PANIC);
 
@@ -280,6 +319,12 @@ int main(void)
 
     MyThread_Join(taskRunnerThread, -1LL);
     MyThread_Join(errDispThread, -1LL);
+
+    //0x00040001 == BETTER_SCHEDULER_STOP_SCHEDULER.
+    svcKernelSetState(0x00040001);
+
+    for(u8 i = 0; i < cores; i++)
+        MyThread_Join(&switchThread[i], -1LL);
 
     return 0;
 }

@@ -26,6 +26,7 @@
 #include <string.h>
 
 #include "svc/KernelSetState.h"
+#include "svc/BetterScheduler.h"
 #include "synchronization.h"
 #include "ipc.h"
 #include "debug.h"
@@ -213,6 +214,37 @@ Result KernelSetStateHook(u32 type, u32 varg1, u32 varg2, u32 varg3)
         case 0x10080:
         {
             disableThreadRedirection = varg1 != 0;
+            break;
+        }
+        case BETTER_SCHEDULER_START_SCHEDULER:
+        {
+            //varg1 == Event handle.
+            res = BetterScheduler(type, 0, (u32)varg1);
+            break;
+        }
+        case BETTER_SCHEDULER_STOP_SCHEDULER:
+        {
+            res = BetterScheduler(type, 0, 0);
+            break;
+        }
+        case BETTER_SCHEDULER_REGISTER_THREAD:
+        case BETTER_SCHEDULER_SET_AFFINITY_MASK:
+        {
+            //varg1 == Target thread handle.
+            //varg2 == Affinity mask.
+            res = BetterScheduler(type, (Handle)varg1, varg2);
+            break;
+        }
+        case BETTER_SCHEDULER_UNREGISTER_THREAD:
+        {
+            //varg1 == Target thread handle.
+            res = BetterScheduler(type, (Handle)varg1, 0);
+            break;
+        }
+        case BETTER_SCHEDULER_DEBUG:
+        {
+            //varg1, varg2 == Debug parameters.
+            res = BetterScheduler(type, (Handle)varg1, (u32)varg2);
             break;
         }
         default:

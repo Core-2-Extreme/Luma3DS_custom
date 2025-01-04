@@ -124,6 +124,9 @@ void  (*mcuReboot)(void);
 void  (*coreBarrier)(void);
 void* (*kAlloc)(FcramDescriptor *fcramDesc, u32 nbPages, u32 alignment, u32 region);
 
+KThread * (*ContextSwitchFpu)(KThread *kthread);
+void * (*SleepThreadInternal)(KThread *kthread, void *unused, s64 ns);
+
 CfwInfo cfwInfo;
 u32 kextBasePa;
 u32 stolenSystemMemRegionSize;

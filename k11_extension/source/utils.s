@@ -126,6 +126,26 @@ KProcessHwInfo__MapL2Section_Hook:
     mov     r6, r2
     mov     pc, lr
 
+.global ContextSwitchHook
+.type   ContextSwitchHook, %function
+ContextSwitchHook:
+    push { r0-r4, lr }
+
+    @ Ptr for the thread that about to be executed.
+    mov r0, r4
+    @ Do our stuff here.
+    bl BetterSchedulerContextSwitchHookc
+
+    pop { r0-r4, lr }
+
+    @ Start of original code.
+    ldr r0, =0xFFFF9000
+    str r4, [r0]
+    ldr r0, [r4, #0x94]
+    @ End of original code.
+
+    mov pc, lr
+
 .global safecpy
 .type   safecpy, %function
 safecpy:

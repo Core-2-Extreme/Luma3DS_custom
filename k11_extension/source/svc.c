@@ -49,6 +49,7 @@
 #include "svc/CopyHandle.h"
 #include "svc/TranslateHandle.h"
 #include "svc/ControlMemoryUnsafe.h"
+#include "svc/BetterScheduler.h"
 
 void *officialSVCs[0x7E] = {NULL};
 void *alteredSvcTable[0x100] = {NULL};
@@ -138,4 +139,31 @@ void postprocessSvc(void)
         rosalinaRescheduleThread(currentThread, true);
 
     officialPostProcessSvc();
+}
+
+void enterSvc(u8 svcId)
+{
+    KThread *currentThread = currentCoreContext->objectContext.currentThread;
+
+    KRecursiveLock__Lock(criticalSectionLock);
+
+    //We'll enter svc.
+    BetterSchedulerUpdateInSvcFlag(currentThread, true);
+
+    //Check for ExitThread().
+    if(svcId == 0x09)
+    {
+        //Remove us here since we are about to die.
+        BetterSchedulerRemoveThread(currentThread);
+    }
+
+    KRecursiveLock__Unlock(criticalSectionLock);
+}
+
+void leaveSvc(void)
+{
+    KThread *currentThread = currentCoreContext->objectContext.currentThread;
+
+    //We've leaved svc.
+    BetterSchedulerUpdateInSvcFlag(currentThread, false);
 }

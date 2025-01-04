@@ -16,7 +16,7 @@ export HBLDR_DEFAULT_3DSX_TID ?= 000400000D921E00
 export HBLDR_DEFAULT_3DSX_TITLE_NAME ?= "hblauncher_loader"
 
 NAME		:=	$(notdir $(CURDIR))
-REVISION	:=	$(shell git describe --tags --match v[0-9]* --abbrev=8 | sed 's/-[0-9]*-g/-/')
+REVISION	:=	$(shell git describe --tags --match v[0-9]*_sched --abbrev=8 | sed 's/-[0-9]*-g/-/')
 
 SUBFOLDERS	:=	sysmodules arm11 arm9 k11_extension
 

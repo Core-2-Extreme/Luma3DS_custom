@@ -156,6 +156,23 @@ static void installMmuHooks(void)
     mapL2Section[3] = (u32)KProcessHwInfo__MapL2Section_Hook;
 }
 
+void ContextSwitchHook(void);
+
+static void installContextSwitchHook(void)
+{
+    static const u8 patternEndOfContextSwitch[] = {0x94, 0x00, 0x94, 0xE5, 0x70, 0x0F, 0x0D, 0xEE};
+    u32 k11TextStartVa = (u32)originalHandlers[2] & ~0xFFFF;
+    u32 *text = (u32 *)memsearch((u8*)k11TextStartVa, patternEndOfContextSwitch, UINT32_MAX, sizeof(patternEndOfContextSwitch));
+
+    // We need 2 instructions (8 Bytes) before.
+    text -= 2;
+    text = PA_FROM_VA_PTR((u32 *)(text));
+
+    text[0] = 0xE28FE004; // add lr, pc, #4
+    text[1] = 0xE51FF004; // ldr pc, [pc, #-4]
+    text[2] = (u32)ContextSwitchHook;
+}
+
 static void findUsefulSymbols(void)
 {
     u32 *off;
@@ -362,6 +379,18 @@ static void findUsefulSymbols(void)
     }
 
     installMmuHooks();
+
+    {
+        static const u8 patternContextSwitchFpu[] = {0x00, 0x50, 0xA0, 0xE1, 0x2C, 0x40, 0x9F, 0xE5, 0x00, 0x60, 0x94, 0xE5};
+        void *text = NULL;
+
+        text = memsearch((u8 *)k11TextStartVa, patternContextSwitchFpu, UINT32_MAX, sizeof(patternContextSwitchFpu));
+        ContextSwitchFpu = (KThread * (*)(KThread *))(text - 4); // We need 1 instruction before.
+
+        SleepThreadInternal = (void * (*)(KThread *, void *, s64))decodeArmBranch((u32 *)officialSVCs[0x0A] + 10);
+
+        installContextSwitchHook();
+    }
 }
 
 void main(FcramLayout *layout, KCoreContext *ctxs)
