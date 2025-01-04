@@ -28,7 +28,7 @@
 #include "svc/BetterScheduler.h"
 #include "synchronization.h"
 
-// #define BETTER_SCHEDULER_DEBUG
+#define BETTER_SCHEDULER_ENABLE_DEBUG
 
 //Lower number gives higher priority.
 #define BETTER_SCHEDULER_MAX_CORES                  (u8)(4)
@@ -71,9 +71,9 @@ static volatile KThread *betterSchedulerWorkerThreads[BETTER_SCHEDULER_MAX_CORES
 static volatile KThread *betterSchedulerCurrentThreads[BETTER_SCHEDULER_MAX_CORES] = { 0, };
 static volatile BetterSchedulerQueue betterSchedulerTargetQueue[BETTER_SCHEDULER_MAX_CORES][BETTER_SCHEDULER_QUEUE_CAPACITY] = { 0, };
 static volatile BetterSchedulerThreads betterSchedulerThreads = { 0, };
-#if defined(BETTER_SCHEDULER_DEBUG)
+#if defined(BETTER_SCHEDULER_ENABLE_DEBUG)
 static volatile u32 debug[BETTER_SCHEDULER_MAX_CORES] = { 0, };
-#endif //defined(BETTER_SCHEDULER_DEBUG)
+#endif //defined(BETTER_SCHEDULER_ENABLE_DEBUG)
 
 void BetterSchedulerContextSwitchHookc(KThread *nextThread)
 {
@@ -158,9 +158,9 @@ void BetterSchedulerContextSwitchHookc(KThread *nextThread)
                         betterSchedulerTargetQueue[targetCurrentCore][k].thread = target;
                         target->padding |= BETTER_SCHEDULER_DISABLE_SELECTION_MASK;
 
-#if defined(BETTER_SCHEDULER_DEBUG)
+#if defined(BETTER_SCHEDULER_ENABLE_DEBUG)
                         debug[lowestPriorityCore]++;
-#endif //defined(BETTER_SCHEDULER_DEBUG)
+#endif //defined(BETTER_SCHEDULER_ENABLE_DEBUG)
 
                         if(!event->isSignaled)
                         {
@@ -517,7 +517,7 @@ Result BetterScheduler(u32 op, Handle threadHandle, u32 parameters)
                     obj->vtable->DecrementReferenceCount(obj);
 
                     for(u8 k = (i + 1); k < betterSchedulerThreads.registeredThreads; k++)
-                        betterSchedulerThreads.thread[k - 1] = betterSchedulerThreads.thread[i];
+                        betterSchedulerThreads.thread[k - 1] = betterSchedulerThreads.thread[k];
 
                     betterSchedulerThreads.thread[betterSchedulerThreads.registeredThreads - 1] = NULL;
                     betterSchedulerThreads.registeredThreads--;
@@ -538,10 +538,12 @@ Result BetterScheduler(u32 op, Handle threadHandle, u32 parameters)
     }
     else if(op == BETTER_SCHEDULER_DEBUG)
     {
-#if defined(BETTER_SCHEDULER_DEBUG)
+#if defined(BETTER_SCHEDULER_ENABLE_DEBUG)
         u32 *dst = (u32 *)threadHandle;
-        memcpy(dst, (void *)debug, sizeof(debug));
-#endif //defined(BETTER_SCHEDULER_DEBUG)
+
+        if(dst)
+            memcpy(dst, (void *)debug, sizeof(debug));
+#endif //defined(BETTER_SCHEDULER_ENABLE_DEBUG)
 
         result = 0;
     }
