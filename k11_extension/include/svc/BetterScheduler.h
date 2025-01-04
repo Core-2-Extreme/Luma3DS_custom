@@ -26,18 +26,17 @@
 
 #pragma once
 
-#include "types.h"
-#include "globals.h"
-#include "kernel.h"
 #include "utils.h"
+#include "kernel.h"
+#include "svc.h"
 
-extern void *officialSVCs[0x7E];
-extern void *alteredSvcTable[0x100];
+#define BETTER_SCHEDULER_START_SCHEDULER    (u32)(0x00040000)
+#define BETTER_SCHEDULER_STOP_SCHEDULER     (u32)(0x00040001)
+#define BETTER_SCHEDULER_DEBUG              (u32)(0x00040002)
+#define BETTER_SCHEDULER_REGISTER_THREAD    (u32)(0x00040005)
+#define BETTER_SCHEDULER_UNREGISTER_THREAD  (u32)(0x00040006)
+#define BETTER_SCHEDULER_SET_AFFINITY_MASK  (u32)(0x00040010)
 
-void buildAlteredSvcTable(void);
-
-void postprocessSvc(void);
-void svcDefaultHandler(u8 svcId);
-
-void enterSvc(u8 svcId);
-void leaveSvc(void);
+void BetterSchedulerUpdateInSvcFlag(KThread *thread, bool inSvc);
+void BetterSchedulerRemoveThread(KThread* thread);
+Result BetterScheduler(u32 op, Handle threadHandle, u32 parameters);
