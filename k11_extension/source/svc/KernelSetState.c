@@ -227,6 +227,12 @@ Result KernelSetStateHook(u32 type, u32 varg1, u32 varg2, u32 varg3)
             res = BetterScheduler(type, 0, 0);
             break;
         }
+        case BETTER_SCHEDULER_FEATURES:
+        {
+            //varg1 == Output buffer.
+            res = BetterScheduler(type, (Handle)varg1, 0);
+            break;
+        }
         case BETTER_SCHEDULER_REGISTER_THREAD:
         case BETTER_SCHEDULER_SET_AFFINITY_MASK:
         {

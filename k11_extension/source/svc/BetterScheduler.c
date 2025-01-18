@@ -28,7 +28,7 @@
 #include "svc/BetterScheduler.h"
 #include "synchronization.h"
 
-#define BETTER_SCHEDULER_ENABLE_DEBUG
+// #define BETTER_SCHEDULER_ENABLE_DEBUG
 
 //Lower number gives higher priority.
 #define BETTER_SCHEDULER_MAX_CORES                  (u8)(4)
@@ -388,6 +388,21 @@ Result BetterScheduler(u32 op, Handle threadHandle, u32 parameters)
         KRecursiveLock__Unlock(criticalSectionLock);
 
         result = 0;//Success.
+    }
+    else if(op == BETTER_SCHEDULER_FEATURES)
+    {
+        u32 *dst = (u32 *)threadHandle;
+
+        if(dst)
+        {
+            *dst = BETTER_SCHEDULER_FEATURE_NONE;
+            *dst |= BETTER_SCHEDULER_FEATURE_CROSS_CORE;
+            *dst |= BETTER_SCHEDULER_FEATURE_CORE_1_UNLIMITED;
+
+            result = 0;//Success.
+        }
+        else
+            result = 0xD8E007F7;//Invalid handle (actually invalid buffer pointer).
     }
     else if(op == BETTER_SCHEDULER_REGISTER_THREAD
     || op == BETTER_SCHEDULER_SET_AFFINITY_MASK)
