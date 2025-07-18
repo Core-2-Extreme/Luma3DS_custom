@@ -46,6 +46,7 @@ u32 waitInput(bool isMenu);
 void mcuPowerOff(void);
 void wait(u64 amount);
 void error(const char *fmt, ...);
+bool warn(const char *fmt, ...);
 
 u16 crc16(const void *data, size_t size, u16 initialValue);
 u32 crc32(const void *data, size_t size, u32 initialValue);
