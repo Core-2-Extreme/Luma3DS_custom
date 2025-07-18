@@ -618,6 +618,38 @@ u32 patchP9AccessChecks(u8 *pos, u32 size)
     return 0;
 }
 
+u32 patchKernel9Fs(u8 *pos, u32 size)
+{
+    static const u8 pattern[] = {  0x00, 0xF0, 0x82, 0xFA, 0x00, 0x28, 0xAC, 0xD0, };
+    u16* off = (u16 *)memsearch(pos, pattern, size, sizeof(pattern));
+    const char* msg = "This patch speeds up boot speed significantly\n"
+    "for someone who has high capacity SD card\n"
+    "(especially noticeable for 64GB+).\n\n"
+    "Please note :\n"
+    "This is beta version so it may contain bugs.\n"
+    "To reduce the risk, back up important files and\n"
+    "refrain from dangerous activities (such as\n"
+    "updating system FW).\n"
+    "Accept the risk to apply this patch.\n\n"
+    "Patch point : 0x%08X\n"
+    "If the value above is 0x00000000 the patch isn't\n"
+    "available for your console, if so let us know!";
+
+    if(warn(msg, (uintptr_t)off) && off)
+    {
+        off[0] = 0x3038;//adds r0, r0, 0x38
+        off[1] = 0x6801;//ldr r1, [r0]
+        off[2] = 0x6701;//str r1, [r0, #0x70]
+        off[3] = 0x0000;//movs r0, r0 (aka "nop")
+    }
+
+    //Allow booting without this patch for now.
+    // if(!off)
+    //     return 1;
+
+    return 0;
+}
+
 u32 patchUnitInfoValueSet(u8 *pos, u32 size)
 {
     //Look for UNITINFO value being set during kernel sync

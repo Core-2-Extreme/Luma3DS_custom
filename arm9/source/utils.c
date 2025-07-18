@@ -158,6 +158,37 @@ void error(const char *fmt, ...)
     mcuPowerOff();
 }
 
+bool warn(const char *fmt, ...)
+{
+    char buf[DRAW_MAX_FORMATTED_STRING_SIZE + 1];
+    u32 posY = 0;
+    u32 key = 0;
+
+    va_list args;
+    va_start(args, fmt);
+    vsprintf(buf, fmt, args);
+    va_end(args);
+
+    initScreens();
+    posY = drawString(true, 10, 10, COLOR_YELLOW, "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n!!!!!!!!!!!!!!!!!!!!WARNING!!!!!!!!!!!!!!!!!!!!!\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+    posY = drawString(true, 10, posY + 2 * SPACING_Y, COLOR_WHITE, buf);
+    posY = drawString(true, 10, posY + 2 * SPACING_Y, COLOR_YELLOW, "Press A or B to accept the risk.");
+    posY = drawString(true, 10, posY + SPACING_Y, COLOR_GREEN, "Press Y or START to reject the risk.");
+    posY = drawString(true, 10, posY + SPACING_Y, COLOR_WHITE, "Press X or SELECT to shutdown.");
+
+    while(true)
+    {
+        key = waitInput(false);
+
+        if(key == BUTTON_X || key == BUTTON_SELECT)
+            mcuPowerOff();
+        else if(key == BUTTON_Y || key == BUTTON_START)
+            return false;
+        else if(key == BUTTON_A || key == BUTTON_B)
+            return true;
+    }
+}
+
 u16 crc16(const void *data, size_t size, u16 initialValue)
 {
     static u16 lut[256] = {0};
