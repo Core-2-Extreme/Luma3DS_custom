@@ -44,5 +44,6 @@ bool findPayload(char *path, u32 pressed);
 bool payloadMenu(char *path, bool *hasDisplayedMenu);
 u32 firmRead(void *dest, u32 firmType);
 void findDumpFile(const char *folderPath, char *fileName);
+bool getFreeSpace(const char *path, u64* out_size, u32* out_clusters);
 
 bool doLumaUpgradeProcess(void);

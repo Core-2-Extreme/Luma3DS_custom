@@ -620,27 +620,54 @@ u32 patchP9AccessChecks(u8 *pos, u32 size)
 
 u32 patchKernel9Fs(u8 *pos, u32 size)
 {
+    // todo: check pattern for every fw.
     static const u8 pattern[] = {  0x00, 0xF0, 0x82, 0xFA, 0x00, 0x28, 0xAC, 0xD0, };
     u16* off = (u16 *)memsearch(pos, pattern, size, sizeof(pattern));
-    const char* msg = "This patch speeds up boot speed significantly\n"
-    "for someone who has high capacity SD card\n"
-    "(especially noticeable for 64GB+).\n\n"
-    "Please note :\n"
-    "This is beta version so it may contain bugs.\n"
-    "To reduce the risk, back up important files and\n"
-    "refrain from dangerous activities (such as\n"
-    "updating system FW).\n"
-    "Accept the risk to apply this patch.\n\n"
-    "Patch point : 0x%08X\n"
-    "If the value above is 0x00000000 the patch isn't\n"
-    "available for your console, if so let us know!";
 
-    if(warn(msg, (uintptr_t)off) && off)
-    {
-        off[0] = 0x3038;//adds r0, r0, 0x38
-        off[1] = 0x6801;//ldr r1, [r0]
-        off[2] = 0x6701;//str r1, [r0, #0x70]
-        off[3] = 0x0000;//movs r0, r0 (aka "nop")
+    // todo: check pattern for every fw.
+    static const u8 pattern2[] = { 0x70, 0xb5, 0x00, 0x24, 0xa8, 0x21, 0x0c, 0x50, 0xc1, 0x6a, 0x03, 0x29, 0x0b, 0xd0, 0x05, 0x00, 0x00, 0xf0, 0x0c, 0xff };
+    u16* off2 = (u16 *)memsearch(pos, pattern2, size, sizeof(pattern2));
+
+    if (!off) {
+        warn("Failed to find fs cluster pattern1");
+    }
+    else if (!off2) {
+        warn("Failed to find fs cluster pattern2");
+    }
+    else {
+        u32 free_clusters;
+        if (!getFreeSpace("sdmc:", NULL, &free_clusters)) {
+            warn("FatFS failed to get free clusters...");
+        }
+        else {
+            const char* msg = "This patch speeds up boot speed significantly\n"
+            "for someone who has high capacity SD card\n"
+            "(especially noticeable for 64GB+).\n\n"
+            "Please note :\n"
+            "This is beta version so it may contain bugs.\n"
+            "To reduce the risk, back up important files and\n"
+            "refrain from dangerous activities (such as\n"
+            "updating system FW).\n"
+            "Accept the risk to apply this patch.\n\n"
+            "Patch point : 0x%08X\n"
+            "If the value above is 0x00000000 the patch isn't\n"
+            "available for your console, if so let us know!";
+
+            if(warn(msg, (uintptr_t)off) && off)
+            {
+                // nop the cmp and beq.
+                off[2] = 0x0000;//movs r0, r0 (aka "nop")
+                off[3] = 0x0000;//movs r0, r0 (aka "nop")
+
+                // patch the jump location to write the free cluster count.
+                off2[0] = 0x4901;//ldr r1, [pc, #4]
+                off2[1] = 0x3038;//adds r0, r0, 0x38
+                off2[2] = 0x6701;//str r1, [r0, #0x70]
+                off2[3] = 0x4770;//bx lr
+                off2[4] = free_clusters & 0xFFFF;
+                off2[5] = free_clusters >> 16;
+            }
+        }
     }
 
     //Allow booting without this patch for now.
