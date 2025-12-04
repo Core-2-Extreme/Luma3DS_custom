@@ -632,7 +632,7 @@ u32 patchKernel9Fs(u8 *pos, u32 size)
     "updating system FW).\n"
     "Accept the risk to apply this patch.\n\n"
     "Patch point : 0x%08X\n"
-    "If the value above is 0x00000000 the patch isn't\n"
+    "If the value shown above equals 0x00000000 the patch isn't\n"
     "available for your console, if so let us know!";
 
     if(warn(msg, (uintptr_t)off) && off)
