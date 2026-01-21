@@ -158,7 +158,7 @@ void error(const char *fmt, ...)
     mcuPowerOff();
 }
 
-bool warn(const char *fmt, ...)
+bool warn(const char *bottom_msg, const char *fmt, ...)
 {
     char buf[DRAW_MAX_FORMATTED_STRING_SIZE + 1];
     u32 posY = 0;
@@ -175,6 +175,8 @@ bool warn(const char *fmt, ...)
     posY = drawString(true, 10, posY + 2 * SPACING_Y, COLOR_YELLOW, "Press A or B to accept the risk.");
     posY = drawString(true, 10, posY + SPACING_Y, COLOR_GREEN, "Press Y or START to reject the risk.");
     posY = drawString(true, 10, posY + SPACING_Y, COLOR_WHITE, "Press X or SELECT to shutdown.");
+
+    drawString(false, 10, 10, COLOR_GREEN, bottom_msg);
 
     while(true)
     {

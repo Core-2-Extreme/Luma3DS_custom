@@ -621,22 +621,33 @@ u32 patchP9AccessChecks(u8 *pos, u32 size)
 u32 patchKernel9Fs(u8 *pos, u32 size)
 {
     static const u8 pattern[] = {  0x00, 0xF0, 0x82, 0xFA, 0x00, 0x28, 0xAC, 0xD0, };
+    bool apply_patch = false;
     u16* off = (u16 *)memsearch(pos, pattern, size, sizeof(pattern));
     const char* msg = "This patch speeds up boot speed significantly\n"
     "for someone who has high capacity SD card\n"
     "(especially noticeable for 64GB+).\n\n"
-    "Please note :\n"
+    "Please note:\n"
     "This is beta version so it may contain bugs.\n"
     "To reduce the risk, back up important files and\n"
     "refrain from dangerous activities (such as\n"
     "updating system FW).\n"
     "Accept the risk to apply this patch.\n\n"
-    "Patch point : 0x%08X\n"
+    "Patch point: 0x%08X\n"
     "If the value shown above equals 0x00000000 the\n"
     "patch isn't available for your console, if so\n"
     "let us know!";
+    const char* bottom_msg = "You can hide this warning by enabling\n"
+    "'Hide SD card boot time patch warning'\n"
+    "on Luma3DS configuration menu.\n\n"
+    "Note: Hold SELECT while powering ON\n"
+    "your console to open the configuration\n"
+    "menu.";
 
-    if(warn(msg, (uintptr_t)off) && off)
+    apply_patch = CONFIG(HIDESDPATCHWARNING);//Apply patch without showing warning if configured so.
+    if(!apply_patch)
+        apply_patch = warn(bottom_msg, msg, (uintptr_t)off);//Or ask user what to do.
+
+    if(apply_patch && off)
     {
         off[0] = 0x3038;//adds r0, r0, 0x38
         off[1] = 0x6801;//ldr r1, [r0]
