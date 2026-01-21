@@ -65,6 +65,7 @@ static const char *singleOptionIniNamesBoot[] = {
     "app_syscore_threads_on_core_2",
     "show_system_settings_string",
     "show_gba_boot_screen",
+    "hide_sd_patch_warning",
 };
 
 static const char *singleOptionIniNamesMisc[] = {
@@ -666,6 +667,7 @@ static size_t saveLumaIniConfigToStr(char *out)
         (int)CONFIG(AUTOBOOTEMU), (int)CONFIG(LOADEXTFIRMSANDMODULES),
         (int)CONFIG(PATCHGAMES), (int)CONFIG(REDIRECTAPPTHREADS),
         (int)CONFIG(PATCHVERSTRING), (int)CONFIG(SHOWGBABOOT),
+        (int)CONFIG(HIDESDPATCHWARNING),
 
         1 + (int)MULTICONFIG(DEFAULTEMU), 4 - (int)MULTICONFIG(BRIGHTNESS),
         splashPosStr, (unsigned int)cfg->splashDurationMsec,
@@ -848,6 +850,7 @@ void configMenu(bool oldPinStatus, u32 oldPinMode)
                                                "( ) Redirect app. syscore threads to core2",
                                                "( ) Show NAND or user string in System Settings",
                                                "( ) Show GBA boot screen in patched AGB_FIRM",
+                                               "( ) Hide SD card boot time patch warning",
 
                                                // Should always be the last 2 entries
                                                "\nBoot chainloader",
@@ -937,6 +940,16 @@ void configMenu(bool oldPinStatus, u32 oldPinMode)
                                                  "Enable showing the GBA boot screen\n"
                                                  "when booting GBA games.",
 
+                                                 "Hide SD card boot time patch warning\n"
+                                                 "that is shown at every boot.\n\n"
+                                                 "Enabling this option (==hiding warning\n"
+                                                 ") causes automatic acception of the\n"
+                                                 "risk, thus applying the patch automati\n"
+                                                 "cally without asking on every boot.\n\n"
+                                                 "Only enable this option if you know\n"
+                                                 "what you are doing!!!!!\n"
+                                                 "As well as at your own risk!!!!!",
+
                                                 // Should always be the last 2 entries
                                                 "Boot to the Luma3DS chainloader menu.",
 
@@ -978,6 +991,7 @@ void configMenu(bool oldPinStatus, u32 oldPinMode)
         { .visible = true },
         { .visible = true },
         { .visible = ISN3DS },
+        { .visible = true },
         { .visible = true },
         { .visible = true },
         { .visible = true },
