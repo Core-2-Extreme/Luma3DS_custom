@@ -148,21 +148,17 @@ ContextSwitchHookCore1:
 .type   ContextSwitchHook, %function
 ContextSwitchHook:
     push { r0-r4, lr }
-
-    @ Ptr for the thread that about to be executed.
-    mov r0, r4
-    @ Do our stuff here.
-    bl BetterSchedulerContextSwitchHookc
-
+    mov r0, r4              @ Ptr for the thread that about to be executed.
+    bl BetterSchedulerContextSwitchHookc    @ Perform cross-core context switch.
     pop { r0-r4, lr }
 
     @ Start of original code.
-    ldr r0, =0xFFFF9000
-    str r4, [r0]
-    ldr r0, [r4, #0x94]
+    ldr r0, =0xFFFF9000     @ Get current...
+    str r4, [r0]            @ thread's...
+    ldr r0, [r4, #0x94]     @ TLS.
     @ End of original code.
 
-    mov pc, lr
+    mov pc, lr              @ Return to official code.
 
 .global safecpy
 .type   safecpy, %function
