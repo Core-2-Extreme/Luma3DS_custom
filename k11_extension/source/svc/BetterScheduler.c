@@ -385,6 +385,10 @@ Result BetterScheduler(u32 op, Handle threadHandle, u32 parameters)
             if(betterSchedulerEvents[i])
             {
                 KEvent *event = (KEvent *)betterSchedulerEvents[i];
+
+                //Always signal no matter if it's already signaled just in case.
+                //Note: Double signaling is fine because it prioritizes exit `if(!betterSchedulerWorkerThreads[currentCore])` check.
+                event->isSignaled = true;
                 KSynchronizationObject__Signal(&event->syncObject, (event->resetType == RESET_PULSE));
             }
         }
