@@ -249,8 +249,8 @@ Result KernelSetStateHook(u32 type, u32 varg1, u32 varg2, u32 varg3)
         }
         case BETTER_SCHEDULER_DEBUG:
         {
-            //varg1, varg2 == Debug parameters.
-            res = BetterScheduler(type, (Handle)varg1, (u32)varg2);
+            //varg1 == Debug parameters.
+            res = BetterScheduler(type, (Handle)varg1, 0);
             break;
         }
         default:

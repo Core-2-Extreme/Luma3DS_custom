@@ -156,7 +156,35 @@ static void installMmuHooks(void)
     mapL2Section[3] = (u32)KProcessHwInfo__MapL2Section_Hook;
 }
 
+void ContextSwitchHookCore1(void);
 void ContextSwitchHook(void);
+
+static void installContextSwitchHookCore1(void)
+{
+    static const u8 patternPreemption[] = {0xB0, 0x01, 0xD5, 0xE1, 0x01, 0x00, 0x50, 0xE3};
+    u32 k11TextStartVa = (u32)originalHandlers[2] & ~0xFFFF;
+    u32 *text = (u32 *)memsearch((u8*)k11TextStartVa, patternPreemption, UINT32_MAX, sizeof(patternPreemption));
+
+    // Patch core #1 usage limit.
+    // When game/homebrew apps use APT_SetAppCpuTimeLimit(), it will limit the time
+    // allowed to run system thread even if user threads use little CPU time.
+    // e.g. Let's say we called APT_SetAppCpuTimeLimit(60);
+    // Then, 60% of CPU time will constantly be allocated to user threads
+    // by suspending system threads (i.e. preemption) even when user app uses little cpu time
+    // so that system thread can only use 40% of CPU time.
+    // This will cause significant slow down for system modules such as fs, httpc, y2r, mvd etc...
+    // This patch disables "suspending system threads" behavior (i.e. preemption) so that if user threads
+    // use little CPU time, then system threads can use rest of CPU time.
+
+    text = PA_FROM_VA_PTR((u32 *)(text));
+
+    text[0] = 0xE28FE004; // add lr, pc, #4
+    text[1] = 0xE51FF004; // ldr pc, [pc, #-4]
+    text[2] = (u32)ContextSwitchHookCore1;
+
+    // //We are replacing if(core_id == 1) with if(core_id == 4) so that it will always be false.
+    // text[1] = 0x040050E3;//cmp r0, #0x1 -> cmp r0, #0x4
+}
 
 static void installContextSwitchHook(void)
 {
@@ -389,6 +417,7 @@ static void findUsefulSymbols(void)
 
         SleepThreadInternal = (void * (*)(KThread *, void *, s64))decodeArmBranch((u32 *)officialSVCs[0x0A] + 10);
 
+        installContextSwitchHookCore1();
         installContextSwitchHook();
     }
 }

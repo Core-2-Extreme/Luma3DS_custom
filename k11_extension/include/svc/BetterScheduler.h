@@ -40,7 +40,6 @@
 
 #define BETTER_SCHEDULER_FEATURE_NONE               (u32)(0x00000000)   //No features.
 #define BETTER_SCHEDULER_FEATURE_CROSS_CORE         (u32)(0x00000001)   //Cross-core context switch is supported.
-#define BETTER_SCHEDULER_FEATURE_CORE_1_UNLIMITED   (u32)(0x00000002)   //Use of core #1 is unlimited.
 
 void BetterSchedulerUpdateInSvcFlag(KThread *thread, bool inSvc);
 void BetterSchedulerRemoveThread(KThread* thread);

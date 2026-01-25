@@ -126,6 +126,24 @@ KProcessHwInfo__MapL2Section_Hook:
     mov     r6, r2
     mov     pc, lr
 
+.global ContextSwitchHookCore1
+.type   ContextSwitchHookCore1, %function
+ContextSwitchHookCore1:
+    @ Start of original code.
+    ldrh r0, [r5, #0x10]    @ If this thread...
+    cmp r0, #0x01           @ is on core #1.
+    @ End of original code.
+
+    push { r0-r4, lr }
+    bleq BetterSchedulerContextSwitchHookCore1c     @ Ask our hook...
+    cmpeq r0, #0x00         @ if preemption is allowed (0 == allow, anything else == forbidden).
+    pop { r0-r4, lr }
+
+    @ Not original code, but do the same (original code: beq #0x10).
+    addeq lr, #0x0C         @ If preemption is allowed, change return address to perform preemption.
+
+    mov pc, lr              @ Return to official code.
+
 .global ContextSwitchHook
 .type   ContextSwitchHook, %function
 ContextSwitchHook:

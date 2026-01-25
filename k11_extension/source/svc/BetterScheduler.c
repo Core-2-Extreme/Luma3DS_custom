@@ -61,6 +61,7 @@ static void BetterSchedulerGetPriorityList(u8 numOfCores, u8 *highestPriorityPer
 static void BetterSchedulerCleanUpInvalidThreads(void);
 static bool BetterSchedulerCheckIsReady(u8 numOfCores);
 static KThread * BetterSchedulerFindTarget(u8 currentCore, u8 currentMaxPriority);
+extern bool BetterSchedulerContextSwitchHookCore1c(void);
 extern void BetterSchedulerContextSwitchHookc(KThread *nextThread);
 
 static volatile bool betterSchedulerIsReady = false;
@@ -74,6 +75,18 @@ static volatile BetterSchedulerThreads betterSchedulerThreads = { 0, };
 #if defined(BETTER_SCHEDULER_ENABLE_DEBUG)
 static volatile u32 debug[BETTER_SCHEDULER_MAX_CORES] = { 0, };
 #endif //defined(BETTER_SCHEDULER_ENABLE_DEBUG)
+
+bool BetterSchedulerContextSwitchHookCore1c(void)
+{
+    bool forbid_preemption = false;
+
+    KRecursiveLock__Lock(criticalSectionLock);
+    //If there are no threads on better scheduler (i.e. in official apps), allow core #1 preemption to avoid regression.
+    forbid_preemption = (betterSchedulerThreads.registeredThreads > 0);
+    KRecursiveLock__Unlock(criticalSectionLock);
+
+    return forbid_preemption;
+}
 
 void BetterSchedulerContextSwitchHookc(KThread *nextThread)
 {
@@ -397,7 +410,6 @@ Result BetterScheduler(u32 op, Handle threadHandle, u32 parameters)
         {
             *dst = BETTER_SCHEDULER_FEATURE_NONE;
             *dst |= BETTER_SCHEDULER_FEATURE_CROSS_CORE;
-            *dst |= BETTER_SCHEDULER_FEATURE_CORE_1_UNLIMITED;
 
             result = 0;//Success.
         }
