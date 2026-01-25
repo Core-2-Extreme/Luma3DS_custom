@@ -55,6 +55,7 @@ Menu rosalinaMenu = {
         { "System configuration...", MENU, .menu = &sysconfigMenu },
         { "Miscellaneous options...", MENU, .menu = &miscellaneousMenu },
         { "Save settings", METHOD, .method = &RosalinaMenu_SaveSettings },
+        { "Return To Home Menu", METHOD, .method = &RosalinaMenu_HomeMenu },
         { "Power off / reboot", METHOD, .method = &RosalinaMenu_PowerOffOrReboot },
         { "System info", METHOD, .method = &RosalinaMenu_ShowSystemInfo },
         { "Credits", METHOD, .method = &RosalinaMenu_ShowCredits },
@@ -273,7 +274,8 @@ static Result RosalinaMenu_WriteScreenshot(IFile *file, u32 width, bool top, boo
 
     u8 *buf = framebufferCache;
     Draw_CreateBitmapHeader(framebufferCache, width, numLinesScaled);
-    buf += 54;
+    const u32 headerSize = 0x40;
+    buf += headerSize;
 
     u32 y = 0;
     // Our buffer might be smaller than the size of the screenshot...
@@ -287,7 +289,7 @@ static Result RosalinaMenu_WriteScreenshot(IFile *file, u32 width, bool top, boo
 
         s64 t1 = svcGetSystemTick();
         timeSpentConvertingScreenshot += t1 - t0;
-        TRY(IFile_Write(file, &total, framebufferCache, (y == 0 ? 54 : 0) + lineSize * nlines * scaleFactorY, 0)); // don't forget to write the header
+        TRY(IFile_Write(file, &total, framebufferCache, (y == 0 ? headerSize : 0) + lineSize * nlines * scaleFactorY, 0)); // don't forget to write the header
         timeSpentWritingScreenshot += svcGetSystemTick() - t1;
 
         y += nlines;
@@ -298,6 +300,34 @@ static Result RosalinaMenu_WriteScreenshot(IFile *file, u32 width, bool top, boo
 
     Draw_FreeFramebufferCache();
     return res;
+}
+
+void RosalinaMenu_HomeMenu(void) {
+    Draw_Lock();
+    Draw_ClearFramebuffer();
+    Draw_FlushFramebuffer();
+    Draw_Unlock();
+
+    do {
+        Draw_DrawString(10, 10, COLOR_TITLE, "Rosalina -- Return to Home");
+        
+        srvPublishToSubscriber(0x204, 0);
+
+        Draw_Lock();
+        Draw_ClearFramebuffer();
+        Draw_DrawString(10, 30, COLOR_WHITE, "Exit Rosalina to get back to the Home Menu.");
+        Draw_DrawString(10, 40, COLOR_WHITE, "Press A to confirm");
+        Draw_FlushFramebuffer();
+        Draw_Unlock();
+
+        u32 pressed = waitInputWithTimeout(1000);
+
+        if(pressed & KEY_A)
+            return;
+        else if(pressed & KEY_B)
+            return;
+    }
+    while(!menuShouldExit);
 }
 
 void RosalinaMenu_TakeScreenshot(void)
