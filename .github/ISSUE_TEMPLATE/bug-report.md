@@ -91,6 +91,6 @@ Show GBA boot screen in patched AGB_FIRM: ( )
 
 **Dump file (if applicable):**
 <!--If the issue leads to a crash you must ensure the "Disable Arm11 exception handlers"
--- option is not disabled in config.ini.
+-- option is not disabled in config_fs_patch.ini.
 -- The error message will tell you where the dump is.
 -- Zip the dmp file and drag & drop it below.-->
