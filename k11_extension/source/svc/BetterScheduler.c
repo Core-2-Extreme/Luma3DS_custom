@@ -57,6 +57,24 @@ typedef struct
     KThread *thread;
 } BetterSchedulerQueue;
 
+typedef struct
+{
+    bool isReady;
+    KRecursiveLock lock;
+    KEvent *events[BETTER_SCHEDULER_MAX_CORES];
+    KThread *workerThreads[BETTER_SCHEDULER_MAX_CORES];
+    KThread *currentThreads[BETTER_SCHEDULER_MAX_CORES];
+    BetterSchedulerQueue targetQueue[BETTER_SCHEDULER_MAX_CORES][BETTER_SCHEDULER_QUEUE_CAPACITY];
+    BetterSchedulerThreads threads;
+} BetterSchedulerRWLockShared;
+
+typedef struct
+{
+    u8 corePriority[BETTER_SCHEDULER_MAX_CORES];
+    u8 numOfCores;
+} BetterSchedulerNoLockShared;
+
+static void BetterSchedulerSetUpNoLockShared(void);
 static inline bool BetterSchedulerIsThreadRegistered(KThread *thread);
 static inline u8 BetterSchedulerGetThreadIndex(KThread *thread);
 static void BetterSchedulerGetPriorityList(u8 numOfCores, u8 *highestPriorityPerCore);
@@ -66,26 +84,135 @@ static KThread * BetterSchedulerFindTarget(u8 currentCore, u8 currentMaxPriority
 extern bool BetterSchedulerContextSwitchHookCore1c(void);
 extern void BetterSchedulerContextSwitchHookc(KThread *nextThread);
 
-static volatile bool betterSchedulerIsReady = false;
-static volatile u8 betterSchedulerCorePriority[BETTER_SCHEDULER_MAX_CORES] = { 0, };
-static volatile u8 betterSchedulerNumOfCores = BETTER_SCHEDULER_MAX_CORES;
-static volatile KEvent *betterSchedulerEvents[BETTER_SCHEDULER_MAX_CORES] = { 0, };
-static volatile KThread *betterSchedulerWorkerThreads[BETTER_SCHEDULER_MAX_CORES] = { 0, };
-static volatile KThread *betterSchedulerCurrentThreads[BETTER_SCHEDULER_MAX_CORES] = { 0, };
-static volatile BetterSchedulerQueue betterSchedulerTargetQueue[BETTER_SCHEDULER_MAX_CORES][BETTER_SCHEDULER_QUEUE_CAPACITY] = { 0, };
-static volatile BetterSchedulerThreads betterSchedulerThreads = { 0, };
+static volatile BetterSchedulerNoLockShared betterSchedulerNoLockShared = { 0, };//This is more like const (set by scheduler thread on boot and not changed after that) therefore no lock is needed.
+static volatile BetterSchedulerRWLockShared betterSchedulerRWLockShared = { 0, };
 #if defined(BETTER_SCHEDULER_ENABLE_DEBUG)
 static volatile u32 debug[BETTER_SCHEDULER_MAX_CORES] = { 0, };
 #endif //defined(BETTER_SCHEDULER_ENABLE_DEBUG)
+
+static inline u8 BetterSchedulerReadPadding(volatile u8* address)
+{
+    u8 value;
+
+    do
+    {
+        value = (u8)__ldrex8((s8*)address);
+    }
+    while (__strex8((s8*)address, (s8)value));
+
+    __dmb();
+
+    return value;
+}
+
+static inline void BetterSchedulerRemovePadding(volatile u8* address, u8 bitToRemove)
+{
+    u8 value;
+
+    do
+    {
+        value = (u8)__ldrex8((s8*)address);
+        value &= ~bitToRemove;
+    }
+    while (__strex8((s8*)address, (s8)value));
+
+    __dmb();
+}
+
+static inline void BetterSchedulerAddPadding(volatile u8* address, u8 bitToAdd)
+{
+    u8 value;
+
+    do
+    {
+        value = (u8)__ldrex8((s8*)address);
+        value |= bitToAdd;
+    }
+    while (__strex8((s8*)address, (s8)value));
+
+    __dmb();
+}
+
+static inline u8 BetterSchedulerReadAndUpdatePadding(volatile u8* address, u8 bitToAdd, u8 bitToRemove)
+{
+    u8 old_value;
+    u8 new_value;
+
+    do
+    {
+        old_value = (u8)__ldrex8((s8*)address);
+        new_value = (old_value | bitToAdd);
+        new_value &= ~bitToRemove;
+    }
+    while (__strex8((s8*)address, (s8)new_value));
+
+    __dmb();
+
+    return old_value;
+}
+
+static void BetterSchedulerSwitchCore(volatile KThread* target, KScheduler* currentScheduler, u8 currentCore, u8 targetCore)
+{
+    bool reschedule = false;
+    u8 padding;
+
+    KRecursiveLock__Lock(criticalSectionLock);
+    {
+        do
+        {
+            padding = (u8)__ldrex8((s8*)(&target->padding));
+
+            if((padding & BETTER_SCHEDULER_IN_SVC_MASK) == 0)
+            {
+                //Remove from scheduler.
+                if(target->schedulingMask != 0x00)
+                {
+                    target->schedulingMask = 0x00;
+                    KScheduler__AdjustThread(currentScheduler, (KThread*)target, 0x01);
+                }
+
+                //Switch core.
+                target->coreId = targetCore;
+
+                padding |= BETTER_SCHEDULER_SWITCHING_MASK;
+                reschedule = true;
+            }
+            else
+            {
+                //Interrupted by SVC, restore the original core if it's not scheduled.
+                if(target->schedulingMask == 0x00)
+                    target->coreId = currentCore;
+            }
+
+            padding &= ~BETTER_SCHEDULER_DISABLE_SELECTION_MASK;
+        }
+        while (__strex8((s8*)(&target->padding), (s8)padding));
+
+        __dmb();
+
+        if(reschedule)
+        {
+            //Add to scheduler.
+            if(target->schedulingMask == 0x00)
+            {
+                target->schedulingMask = 0x01;
+                KScheduler__AdjustThread(currentScheduler, (KThread*)target, 0x00);
+            }
+        }
+    }
+    KRecursiveLock__Unlock(criticalSectionLock);
+}
 
 bool BetterSchedulerContextSwitchHookCore1c(void)
 {
     bool forbid_preemption = false;
 
-    KRecursiveLock__Lock(criticalSectionLock);
-    //If there are no threads on better scheduler (i.e. in official apps), allow core #1 preemption to avoid regression.
-    forbid_preemption = (betterSchedulerThreads.registeredThreads > 0);
-    KRecursiveLock__Unlock(criticalSectionLock);
+    KRecursiveLock__Lock((KRecursiveLock*)&betterSchedulerRWLockShared.lock);
+    {
+        //If there are no threads on better scheduler (i.e. in official apps), allow core #1 preemption to avoid regression.
+        forbid_preemption = (betterSchedulerRWLockShared.threads.registeredThreads > 0);
+    }
+    KRecursiveLock__Unlock((KRecursiveLock*)&betterSchedulerRWLockShared.lock);
 
     return forbid_preemption;
 }
@@ -94,160 +221,165 @@ void BetterSchedulerContextSwitchHookc(KThread *nextThread)
 {
     bool isNextThreadSwitching = false;
     u8 currentCore = nextThread->coreId;
+    u8 old_padding = 0;
     KThread *currentThread = currentCoreContext->objectContext.currentThread;
-
-    //Don't include our scheduler thread to avoid unnecessary cross core context switch.
-    if(nextThread != betterSchedulerWorkerThreads[currentCore])
-        betterSchedulerCurrentThreads[currentCore] = nextThread;
-
-    isNextThreadSwitching = ((nextThread->padding & BETTER_SCHEDULER_SWITCHING_MASK) == BETTER_SCHEDULER_SWITCHING_MASK);
 
     //We use padding in KThread struct as thread state storage.
     //Thread is running.
-    nextThread->padding |= BETTER_SCHEDULER_RUNNING_MASK;
-    nextThread->padding &= ~BETTER_SCHEDULER_SWITCHING_MASK;
+    old_padding = BetterSchedulerReadAndUpdatePadding(&nextThread->padding, BETTER_SCHEDULER_RUNNING_MASK, BETTER_SCHEDULER_SWITCHING_MASK);
+
+    isNextThreadSwitching = ((old_padding & BETTER_SCHEDULER_SWITCHING_MASK) == BETTER_SCHEDULER_SWITCHING_MASK);
+
     //Thread is NOT running.
-    currentThread->padding &= ~BETTER_SCHEDULER_RUNNING_MASK;
+    BetterSchedulerRemovePadding(&currentThread->padding, BETTER_SCHEDULER_RUNNING_MASK);
 
     //This will enable FPU, save FPU registers for old thread
     //and restore FPU registers for next thread.
-    //We need to do this for cross core context switch.
+    //We need to do this for cross-core context switch.
     ContextSwitchFpu(nextThread);
 
-    if(nextThread->dynamicPriority > BETTER_SCHEDULER_MAX_USER_PRIORITY
-    && !isNextThreadSwitching && betterSchedulerIsReady && betterSchedulerThreads.registeredThreads > 0)
+    //Note: We should lock from here with KRecursiveLock__Lock(), however doing so
+    //will cause system to KRecursiveLock__Lock() and KRecursiveLock__Unlock() everytime
+    //context switch happens and results in noticeable slow down, so we don't lock it here.
+
+    //Don't include our scheduler thread to avoid unnecessary cross-core context switch.
+    if(nextThread != betterSchedulerRWLockShared.workerThreads[currentCore])
+        betterSchedulerRWLockShared.currentThreads[currentCore] = nextThread;
+
+    if(nextThread->dynamicPriority > BETTER_SCHEDULER_MAX_USER_PRIORITY && !isNextThreadSwitching
+    && betterSchedulerRWLockShared.isReady && betterSchedulerRWLockShared.threads.registeredThreads > 0)
     {
-        bool unavailableList[BETTER_SCHEDULER_MAX_CORES] = { 0, };
-        u8 priorityList[BETTER_SCHEDULER_MAX_CORES] = { 0, };
-
-        KRecursiveLock__Lock(criticalSectionLock);
-
-        BetterSchedulerGetPriorityList(betterSchedulerNumOfCores, priorityList);
-
-        for(u8 i = 0; i < betterSchedulerNumOfCores; i++)
+        KRecursiveLock__Lock((KRecursiveLock*)&betterSchedulerRWLockShared.lock);
         {
-            if(priorityList[i] <= BETTER_SCHEDULER_MAX_USER_PRIORITY)
-                unavailableList[i] = true;//No user threads have the priority greater than current priority, ignore this core.
-        }
-
-        for(u8 i = 0; i < betterSchedulerNumOfCores; i++)
-        {
-            u8 lowestPriorityCore = UINT8_MAX;
-            u8 lowestPriority = BETTER_SCHEDULER_MAX_PRIORITY;
-            KThread *target = NULL;
-
-            //Search for lowest priority core.
-            for(u8 k = 0; k < betterSchedulerNumOfCores; k++)
+            //Double check RWLockShared after locking.
+            if(betterSchedulerRWLockShared.isReady && betterSchedulerRWLockShared.threads.registeredThreads > 0)
             {
-                u8 core = betterSchedulerCorePriority[k];
+                u8 numOfCores = betterSchedulerNoLockShared.numOfCores;
+                bool unavailableList[BETTER_SCHEDULER_MAX_CORES] = { 0, };
+                u8 priorityList[BETTER_SCHEDULER_MAX_CORES] = { 0, };
 
-                if(unavailableList[core])
-                    continue;
+                BetterSchedulerGetPriorityList(numOfCores, priorityList);
 
-                //Lower number gives higher priority.
-                if(priorityList[core] > lowestPriority)
+                for(u8 i = 0; i < numOfCores; i++)
                 {
-                    lowestPriority = priorityList[core];
-                    lowestPriorityCore = core;
+                    if(priorityList[i] <= BETTER_SCHEDULER_MAX_USER_PRIORITY)
+                        unavailableList[i] = true;//No user threads have the priority greater than current priority, ignore this core.
                 }
-            }
 
-            if(lowestPriorityCore == UINT8_MAX)
-                break;//Done.
-
-            //Search for the target thread.
-            target = BetterSchedulerFindTarget(lowestPriorityCore, lowestPriority);
-            if(target)
-            {
-                //We've found the target thread.
-                u8 targetCurrentCore = target->coreId;
-                KEvent *event = (KEvent *)betterSchedulerEvents[targetCurrentCore];
-
-                for(u8 k = 0; k < BETTER_SCHEDULER_QUEUE_CAPACITY; k++)
+                for(u8 i = 0; i < numOfCores; i++)
                 {
-                    if(!betterSchedulerTargetQueue[targetCurrentCore][k].thread)
+                    u8 lowestPriorityCore = UINT8_MAX;
+                    u8 lowestPriority = BETTER_SCHEDULER_MAX_PRIORITY;
+                    KThread *target = NULL;
+
+                    //Search for lowest priority core.
+                    for(u8 k = 0; k < numOfCores; k++)
                     {
-                        //We can't change the core here (trying to do so result in crashing/freezing the kernel)
-                        //so send the data to our worker thread.
-                        betterSchedulerTargetQueue[targetCurrentCore][k].targetCore = lowestPriorityCore;
-                        betterSchedulerTargetQueue[targetCurrentCore][k].thread = target;
-                        target->padding |= BETTER_SCHEDULER_DISABLE_SELECTION_MASK;
+                        u8 core = betterSchedulerNoLockShared.corePriority[k];
+
+                        if(unavailableList[core])
+                            continue;
+
+                        //Lower number gives higher priority.
+                        if(priorityList[core] > lowestPriority)
+                        {
+                            lowestPriority = priorityList[core];
+                            lowestPriorityCore = core;
+                        }
+                    }
+
+                    if(lowestPriorityCore == UINT8_MAX)
+                        break;//Done.
+
+                    //Search for the target thread.
+                    target = BetterSchedulerFindTarget(lowestPriorityCore, lowestPriority);
+                    if(target)
+                    {
+                        //We've found the target thread.
+                        u8 targetCurrentCore = target->coreId;
+                        KEvent *event = (KEvent *)betterSchedulerRWLockShared.events[targetCurrentCore];
+
+                        for(u8 k = 0; k < BETTER_SCHEDULER_QUEUE_CAPACITY; k++)
+                        {
+                            if(!betterSchedulerRWLockShared.targetQueue[targetCurrentCore][k].thread)
+                            {
+                                //We can't change the core here (trying to do so result in crashing/freezing the kernel)
+                                //so send the data to our worker thread.
+                                betterSchedulerRWLockShared.targetQueue[targetCurrentCore][k].targetCore = lowestPriorityCore;
+                                betterSchedulerRWLockShared.targetQueue[targetCurrentCore][k].thread = target;
+                                BetterSchedulerAddPadding(&target->padding, BETTER_SCHEDULER_DISABLE_SELECTION_MASK);
 
 #if defined(BETTER_SCHEDULER_ENABLE_DEBUG)
-                        debug[lowestPriorityCore]++;
+                                debug[lowestPriorityCore]++;
 #endif //defined(BETTER_SCHEDULER_ENABLE_DEBUG)
 
-                        //We don't need to signal it if it's already signaled, scheduler thread will process all of them.
-                        if(!event->isSignaled)
-                        {
-                            event->isSignaled = true;
+                                //We don't need to signal it if it's already signaled, scheduler thread will process all of them.
+                                if(!event->isSignaled)
+                                {
+                                    event->isSignaled = true;
 
-                            //Notify it to our scheduler thread.
-                            KSynchronizationObject__Signal(&event->syncObject, (event->resetType == RESET_PULSE));
+                                    //Notify it to our scheduler thread.
+                                    KSynchronizationObject__Signal(&event->syncObject, (event->resetType == RESET_PULSE));
 
-                            //Doesn't work.
-                            // KEvent__Signal(event);
+                                    //Doesn't work.
+                                    // KEvent__Signal(event);
+                                }
+
+                                break;
+                            }
                         }
-
-                        break;
                     }
+
+                    unavailableList[lowestPriorityCore] = true;
                 }
             }
-
-            unavailableList[lowestPriorityCore] = true;
         }
-        KRecursiveLock__Unlock(criticalSectionLock);
+        KRecursiveLock__Unlock((KRecursiveLock*)&betterSchedulerRWLockShared.lock);
     }
 }
 
 void BetterSchedulerUpdateInSvcFlag(KThread *thread, bool inSvc)
 {
-    KRecursiveLock__Lock(criticalSectionLock);
-
     if(inSvc)
-        thread->padding |= BETTER_SCHEDULER_IN_SVC_MASK;
+        BetterSchedulerAddPadding(&thread->padding, BETTER_SCHEDULER_IN_SVC_MASK);
     else
-        thread->padding &= ~BETTER_SCHEDULER_IN_SVC_MASK;
-
-    KRecursiveLock__Unlock(criticalSectionLock);
+        BetterSchedulerRemovePadding(&thread->padding, BETTER_SCHEDULER_IN_SVC_MASK);
 }
 
 void BetterSchedulerRemoveThread(KThread *thread)
 {
-    KRecursiveLock__Lock(criticalSectionLock);
-
-    for(u8 i = 0; i < betterSchedulerThreads.registeredThreads; i++)
+    KRecursiveLock__Lock((KRecursiveLock*)&betterSchedulerRWLockShared.lock);
     {
-        KThread *target = betterSchedulerThreads.thread[i];
-
-        if(!target)
-            continue;
-
-        if(target == thread)
+        for(u8 i = 0; i < betterSchedulerRWLockShared.threads.registeredThreads; i++)
         {
-            KAutoObject *obj = (KAutoObject *)target;
-            obj->vtable->DecrementReferenceCount(obj);
+            KThread *target = betterSchedulerRWLockShared.threads.thread[i];
 
-            //Remove from the list.
-            for(u8 k = (i + 1); k < betterSchedulerThreads.registeredThreads; k++)
-                betterSchedulerThreads.thread[k - 1] = betterSchedulerThreads.thread[k];
+            if(!target)
+                continue;
 
-            betterSchedulerThreads.thread[betterSchedulerThreads.registeredThreads - 1] = NULL;
-            betterSchedulerThreads.registeredThreads--;
-            continue;
+            if(target == thread)
+            {
+                KAutoObject *obj = (KAutoObject *)target;
+                obj->vtable->DecrementReferenceCount(obj);
+
+                //Remove from the list.
+                for(u8 k = (i + 1); k < betterSchedulerRWLockShared.threads.registeredThreads; k++)
+                    betterSchedulerRWLockShared.threads.thread[k - 1] = betterSchedulerRWLockShared.threads.thread[k];
+
+                betterSchedulerRWLockShared.threads.thread[betterSchedulerRWLockShared.threads.registeredThreads - 1] = NULL;
+                betterSchedulerRWLockShared.threads.registeredThreads--;
+                continue;
+            }
         }
-    }
 
-    BetterSchedulerCleanUpInvalidThreads();
-    KRecursiveLock__Unlock(criticalSectionLock);
+        BetterSchedulerCleanUpInvalidThreads();
+    }
+    KRecursiveLock__Unlock((KRecursiveLock*)&betterSchedulerRWLockShared.lock);
 }
 
 Result BetterScheduler(u32 op, Handle threadHandle, u32 parameters)
 {
     Result result = 0;
-
-    betterSchedulerNumOfCores = getNumberOfCores();
-    betterSchedulerNumOfCores = ((betterSchedulerNumOfCores > BETTER_SCHEDULER_MAX_CORES) ? BETTER_SCHEDULER_MAX_CORES : betterSchedulerNumOfCores);
 
     if(op == BETTER_SCHEDULER_START_SCHEDULER)
     {
@@ -255,41 +387,29 @@ Result BetterScheduler(u32 op, Handle threadHandle, u32 parameters)
         KProcessHandleTable *table = handleTableOfProcess(currentCoreContext->objectContext.currentProcess);
         KEvent *event = (KEvent *)KProcessHandleTable__ToKAutoObject(table, parameters);
 
-        //Assign core priority (prefered core for cross core context switch).
-        if(betterSchedulerNumOfCores == 2)
-        {
-            betterSchedulerCorePriority[0] = 0;//User core.
-            betterSchedulerCorePriority[1] = 1;//System core.
-        }
-        else if(betterSchedulerNumOfCores == 4)
-        {
-            betterSchedulerCorePriority[0] = 2;//User core.
-            betterSchedulerCorePriority[1] = 0;//User core.
-            betterSchedulerCorePriority[2] = 3;//System core.
-            betterSchedulerCorePriority[3] = 1;//System core.
-        }
+        BetterSchedulerSetUpNoLockShared();
 
-        KRecursiveLock__Lock(criticalSectionLock);
-
-        if(!event)
-            result = 0xD8E007F7;//Invalid handle.
-        else if(betterSchedulerWorkerThreads[currentCore])
+        KRecursiveLock__Lock((KRecursiveLock*)&betterSchedulerRWLockShared.lock);
         {
-            //Remove reference.
-            KAutoObject *obj = (KAutoObject *)event;
-            obj->vtable->DecrementReferenceCount(obj);
+            if(!event)
+                result = 0xD8E007F7;//Invalid handle.
+            else if(betterSchedulerRWLockShared.workerThreads[currentCore])
+            {
+                //Remove reference.
+                KAutoObject *obj = (KAutoObject *)event;
+                obj->vtable->DecrementReferenceCount(obj);
 
-            result = 0xF8C007F4;//Scheduler thread already exists for this core, not implemented.
+                result = 0xF8C007F4;//Scheduler thread already exists for this core, not implemented.
+            }
+            else
+            {
+                betterSchedulerRWLockShared.events[currentCore] = event;
+                betterSchedulerRWLockShared.workerThreads[currentCore] = currentCoreContext->objectContext.currentThread;
+                betterSchedulerRWLockShared.isReady = BetterSchedulerCheckIsReady(betterSchedulerNoLockShared.numOfCores);
+                result = 0;
+            }
         }
-        else
-        {
-            betterSchedulerEvents[currentCore] = event;
-            betterSchedulerWorkerThreads[currentCore] = currentCoreContext->objectContext.currentThread;
-            betterSchedulerIsReady = BetterSchedulerCheckIsReady(betterSchedulerNumOfCores);
-            result = 0;
-        }
-
-        KRecursiveLock__Unlock(criticalSectionLock);
+        KRecursiveLock__Unlock((KRecursiveLock*)&betterSchedulerRWLockShared.lock);
 
         if(result == 0)
         {
@@ -299,76 +419,66 @@ Result BetterScheduler(u32 op, Handle threadHandle, u32 parameters)
 
             while(true)
             {
+                bool must_stop = false;
                 u8 targetCore = 0;
                 KThread *target = NULL;
 
-                if(wait)
-                    WaitSynchronization1(NULL, currentThread, (KSynchronizationObject *)&betterSchedulerEvents[currentCore]->syncObject, U64_MAX);
+                if(wait)//What should I do for `betterSchedulerRWLockShared.events` here? Locking mutex would block everything...
+                    WaitSynchronization1(NULL, currentThread, (KSynchronizationObject *)&betterSchedulerRWLockShared.events[currentCore]->syncObject, U64_MAX);
 
-                KRecursiveLock__Lock(criticalSectionLock);
-
-                //Check if we must exit the scheduler.
-                if(!betterSchedulerWorkerThreads[currentCore])
+                KRecursiveLock__Lock((KRecursiveLock*)&betterSchedulerRWLockShared.lock);
                 {
-                    //Remove reference.
-                    KAutoObject *obj = (KAutoObject *)betterSchedulerEvents[currentCore];
-                    obj->vtable->DecrementReferenceCount(obj);
-
-                    //Empty queue.
-                    for(u8 i = 0; i < BETTER_SCHEDULER_QUEUE_CAPACITY; i++)
+                    //Check if we must exit the scheduler.
+                    if(!betterSchedulerRWLockShared.workerThreads[currentCore])
                     {
-                        if(betterSchedulerTargetQueue[currentCore][i].thread)
-                            betterSchedulerTargetQueue[currentCore][i].thread->padding &= ~BETTER_SCHEDULER_DISABLE_SELECTION_MASK;
+                        //Remove reference.
+                        KAutoObject *obj = (KAutoObject *)betterSchedulerRWLockShared.events[currentCore];
+                        obj->vtable->DecrementReferenceCount(obj);
 
-                        betterSchedulerTargetQueue[currentCore][i].targetCore = 0;
-                        betterSchedulerTargetQueue[currentCore][i].thread = NULL;
+                        //Empty queue.
+                        for(u8 i = 0; i < BETTER_SCHEDULER_QUEUE_CAPACITY; i++)
+                        {
+                            if(betterSchedulerRWLockShared.targetQueue[currentCore][i].thread)
+                                BetterSchedulerRemovePadding(&betterSchedulerRWLockShared.targetQueue[currentCore][i].thread->padding, BETTER_SCHEDULER_DISABLE_SELECTION_MASK);
+
+                            betterSchedulerRWLockShared.targetQueue[currentCore][i].targetCore = 0;
+                            betterSchedulerRWLockShared.targetQueue[currentCore][i].thread = NULL;
+                        }
+
+                        betterSchedulerRWLockShared.events[currentCore] = NULL;
+                        betterSchedulerRWLockShared.isReady = BetterSchedulerCheckIsReady(betterSchedulerNoLockShared.numOfCores);
+
+                        must_stop = true;//We must stop now.
+                        goto unlock_mutex;
                     }
 
-                    betterSchedulerEvents[currentCore] = NULL;
-                    betterSchedulerIsReady = BetterSchedulerCheckIsReady(betterSchedulerNumOfCores);
+                    //Get data from context-switch queue.
+                    targetCore = betterSchedulerRWLockShared.targetQueue[currentCore][0].targetCore;
+                    target = betterSchedulerRWLockShared.targetQueue[currentCore][0].thread;
 
-                    KRecursiveLock__Unlock(criticalSectionLock);
-                    break;//We must stop now.
+                    if(target)
+                    {
+                        BetterSchedulerSwitchCore(target, currentScheduler, currentCore, targetCore);
+
+                        //Update the queue.
+                        for(u8 i = 1; i < BETTER_SCHEDULER_QUEUE_CAPACITY; i++)
+                        {
+                            betterSchedulerRWLockShared.targetQueue[currentCore][i - 1].targetCore = betterSchedulerRWLockShared.targetQueue[currentCore][i].targetCore;
+                            betterSchedulerRWLockShared.targetQueue[currentCore][i - 1].thread = betterSchedulerRWLockShared.targetQueue[currentCore][i].thread;
+                        }
+                        betterSchedulerRWLockShared.targetQueue[currentCore][BETTER_SCHEDULER_QUEUE_CAPACITY - 1].targetCore = 0;
+                        betterSchedulerRWLockShared.targetQueue[currentCore][BETTER_SCHEDULER_QUEUE_CAPACITY - 1].thread = NULL;
+
+                        // SleepThreadInternal(currentThread, NULL, 10000000);//10ms
+                    }
+
+                    wait = (betterSchedulerRWLockShared.targetQueue[currentCore][0].thread ? false : true);
                 }
+                unlock_mutex:
+                KRecursiveLock__Unlock((KRecursiveLock*)&betterSchedulerRWLockShared.lock);
 
-                //Get data from context-switch queue.
-                targetCore = betterSchedulerTargetQueue[currentCore][0].targetCore;
-                target = betterSchedulerTargetQueue[currentCore][0].thread;
-
-                if(target)
-                {
-                    if(((target->padding & BETTER_SCHEDULER_IN_SVC_MASK) == 0)
-                    && target->coreId == currentCore)
-                    {
-                        //Remove from scheduler, switch core, add to scheduler.
-                        target->schedulingMask = 0x00;
-                        KScheduler__AdjustThread(currentScheduler, target, 0x01);
-
-                        target->coreId = targetCore;
-                        target->padding |= BETTER_SCHEDULER_SWITCHING_MASK;
-                        target->padding &= ~BETTER_SCHEDULER_DISABLE_SELECTION_MASK;
-
-                        target->schedulingMask = 0x01;
-                        KScheduler__AdjustThread(currentScheduler, target, 0x00);
-                    }
-                    else
-                        target->padding &= ~BETTER_SCHEDULER_DISABLE_SELECTION_MASK;
-
-                    //Update the queue.
-                    for(u8 i = 1; i < BETTER_SCHEDULER_QUEUE_CAPACITY; i++)
-                    {
-                        betterSchedulerTargetQueue[currentCore][i - 1].targetCore = betterSchedulerTargetQueue[currentCore][i].targetCore;
-                        betterSchedulerTargetQueue[currentCore][i - 1].thread = betterSchedulerTargetQueue[currentCore][i].thread;
-                    }
-                    betterSchedulerTargetQueue[currentCore][BETTER_SCHEDULER_QUEUE_CAPACITY - 1].targetCore = 0;
-                    betterSchedulerTargetQueue[currentCore][BETTER_SCHEDULER_QUEUE_CAPACITY - 1].thread = NULL;
-
-                    // SleepThreadInternal(currentThread, NULL, 10000000);//10ms
-                }
-
-                wait = (betterSchedulerTargetQueue[currentCore][0].thread ? false : true);
-
-                KRecursiveLock__Unlock(criticalSectionLock);
+                if(must_stop)
+                    break;
             }
 
             result = 0;//Success.
@@ -376,24 +486,24 @@ Result BetterScheduler(u32 op, Handle threadHandle, u32 parameters)
     }
     else if(op == BETTER_SCHEDULER_STOP_SCHEDULER)
     {
-        KRecursiveLock__Lock(criticalSectionLock);
-
-        //Stop all schedulers.
-        for(u8 i = 0; i < BETTER_SCHEDULER_MAX_CORES; i++)
+        KRecursiveLock__Lock((KRecursiveLock*)&betterSchedulerRWLockShared.lock);
         {
-            betterSchedulerWorkerThreads[i] = NULL;
-            if(betterSchedulerEvents[i])
+            //Stop all schedulers.
+            for(u8 i = 0; i < BETTER_SCHEDULER_MAX_CORES; i++)
             {
-                KEvent *event = (KEvent *)betterSchedulerEvents[i];
+                betterSchedulerRWLockShared.workerThreads[i] = NULL;
+                if(betterSchedulerRWLockShared.events[i])
+                {
+                    KEvent *event = (KEvent *)betterSchedulerRWLockShared.events[i];
 
-                //Always signal no matter if it's already signaled just in case.
-                //Note: Double signaling is fine because it prioritizes exit `if(!betterSchedulerWorkerThreads[currentCore])` check.
-                event->isSignaled = true;
-                KSynchronizationObject__Signal(&event->syncObject, (event->resetType == RESET_PULSE));
+                    //Always signal no matter if it's already signaled just in case.
+                    //Note: Double signaling is fine because it prioritizes exit `if(!betterSchedulerRWLockShared.workerThreads[currentCore])` check.
+                    event->isSignaled = true;
+                    KSynchronizationObject__Signal(&event->syncObject, (event->resetType == RESET_PULSE));
+                }
             }
         }
-
-        KRecursiveLock__Unlock(criticalSectionLock);
+        KRecursiveLock__Unlock((KRecursiveLock*)&betterSchedulerRWLockShared.lock);
 
         result = 0;//Success.
     }
@@ -415,12 +525,8 @@ Result BetterScheduler(u32 op, Handle threadHandle, u32 parameters)
     || op == BETTER_SCHEDULER_SET_AFFINITY_MASK)
     {
         u8 coreMask = 0;
-        betterSchedulerNumOfCores = getNumberOfCores();
 
-        if(betterSchedulerNumOfCores > BETTER_SCHEDULER_MAX_CORES)
-            betterSchedulerNumOfCores = BETTER_SCHEDULER_MAX_CORES;
-
-        for(u8 i = 0; i < betterSchedulerNumOfCores; i++)
+        for(u8 i = 0; i < betterSchedulerNoLockShared.numOfCores; i++)
             coreMask |= (1 << i);
 
         if((parameters & coreMask) != 0)
@@ -431,70 +537,71 @@ Result BetterScheduler(u32 op, Handle threadHandle, u32 parameters)
             //We have valid mask.
             parameters = (parameters & coreMask);
 
-            KRecursiveLock__Lock(criticalSectionLock);
-            BetterSchedulerCleanUpInvalidThreads();
-
-            if(thread)
+            KRecursiveLock__Lock((KRecursiveLock*)&betterSchedulerRWLockShared.lock);
             {
-                if(op == BETTER_SCHEDULER_REGISTER_THREAD)
+                BetterSchedulerCleanUpInvalidThreads();
+
+                if(thread)
                 {
-                    bool isFull = true;
-
-                    //Register requested thread.
-                    if(BetterSchedulerIsThreadRegistered(thread))
+                    if(op == BETTER_SCHEDULER_REGISTER_THREAD)
                     {
-                        //Already registered, close handle and return.
-                        KAutoObject *obj = (KAutoObject *)thread;
-                        obj->vtable->DecrementReferenceCount(obj);
-                        result = 0;//Already registered.
-                    }
-                    else
-                    {
-                        for(u8 i = betterSchedulerThreads.registeredThreads; i < BETTER_SCHEDULER_MAX_THREADS; i++)
-                        {
-                            if(!betterSchedulerThreads.thread[i])
-                            {
-                                betterSchedulerThreads.thread[i] = thread;
-                                betterSchedulerThreads.thread[i]->affinityMask = parameters;
-                                betterSchedulerThreads.registeredThreads++;
-                                isFull = false;
-                                break;
-                            }
-                        }
+                        bool isFull = true;
 
-                        if(!isFull)
-                            result = 0;//Successfully registered.
-                        else
+                        //Register requested thread.
+                        if(BetterSchedulerIsThreadRegistered(thread))
                         {
-                            //List is full, close handle and return.
+                            //Already registered, close handle and return.
                             KAutoObject *obj = (KAutoObject *)thread;
                             obj->vtable->DecrementReferenceCount(obj);
-                            result = 0xC860180A;//Out of memory.
+                            result = 0;//Already registered.
+                        }
+                        else
+                        {
+                            for(u8 i = betterSchedulerRWLockShared.threads.registeredThreads; i < BETTER_SCHEDULER_MAX_THREADS; i++)
+                            {
+                                if(!betterSchedulerRWLockShared.threads.thread[i])
+                                {
+                                    betterSchedulerRWLockShared.threads.thread[i] = thread;
+                                    betterSchedulerRWLockShared.threads.thread[i]->affinityMask = parameters;
+                                    betterSchedulerRWLockShared.threads.registeredThreads++;
+                                    isFull = false;
+                                    break;
+                                }
+                            }
+
+                            if(!isFull)
+                                result = 0;//Successfully registered.
+                            else
+                            {
+                                //List is full, close handle and return.
+                                KAutoObject *obj = (KAutoObject *)thread;
+                                obj->vtable->DecrementReferenceCount(obj);
+                                result = 0xC860180A;//Out of memory.
+                            }
                         }
                     }
-                }
-                else if(op == BETTER_SCHEDULER_SET_AFFINITY_MASK)
-                {
-                    u8 index = BetterSchedulerGetThreadIndex(thread);
-
-                    if(index != BETTER_SCHEDULER_MAX_THREADS)
+                    else if(op == BETTER_SCHEDULER_SET_AFFINITY_MASK)
                     {
-                        //Set affinity mask.
-                        betterSchedulerThreads.thread[index]->affinityMask = parameters;
-                        result = 0;//Success.
+                        u8 index = BetterSchedulerGetThreadIndex(thread);
+
+                        if(index != BETTER_SCHEDULER_MAX_THREADS)
+                        {
+                            //Set affinity mask.
+                            betterSchedulerRWLockShared.threads.thread[index]->affinityMask = parameters;
+                            result = 0;//Success.
+                        }
+                        else
+                            result = 0xD8E007F7;//Thread is NOT registered, invalid handle (for this operation).
+
+                        //Close handle and return.
+                        KAutoObject *obj = (KAutoObject *)thread;
+                        obj->vtable->DecrementReferenceCount(obj);
                     }
-                    else
-                        result = 0xD8E007F7;//Thread is NOT registered, invalid handle (for this operation).
-
-                    //Close handle and return.
-                    KAutoObject *obj = (KAutoObject *)thread;
-                    obj->vtable->DecrementReferenceCount(obj);
                 }
+                else
+                    result = 0xD8E007F7;//Invalid handle.
             }
-            else
-                result = 0xD8E007F7;//Invalid handle.
-
-            KRecursiveLock__Unlock(criticalSectionLock);
+            KRecursiveLock__Unlock((KRecursiveLock*)&betterSchedulerRWLockShared.lock);
         }
         else
             result = 0xD8E007ED;//At least 1 processor must be selected, invalid enum (parameters) value.
@@ -504,39 +611,40 @@ Result BetterScheduler(u32 op, Handle threadHandle, u32 parameters)
         KProcessHandleTable *handleTable = handleTableOfProcess(currentCoreContext->objectContext.currentProcess);
         KThread *thread = KProcessHandleTable__ToKThread(handleTable, threadHandle);
 
-        KRecursiveLock__Lock(criticalSectionLock);
-        BetterSchedulerCleanUpInvalidThreads();
-
-        if(thread)
+        KRecursiveLock__Lock((KRecursiveLock*)&betterSchedulerRWLockShared.lock);
         {
-            u8 index = BetterSchedulerGetThreadIndex(thread);
+            BetterSchedulerCleanUpInvalidThreads();
 
-            //Remove requested thread if exists.
-            if(index != BETTER_SCHEDULER_MAX_THREADS)
+            if(thread)
             {
-                KAutoObject *obj = (KAutoObject *)betterSchedulerThreads.thread[index];
+                u8 index = BetterSchedulerGetThreadIndex(thread);
 
-                betterSchedulerThreads.thread[index]->padding &= ~BETTER_SCHEDULER_DISABLE_SELECTION_MASK;
-                betterSchedulerThreads.thread[index]->affinityMask = (1 << betterSchedulerThreads.thread[index]->coreId);
+                //Remove requested thread if exists.
+                if(index != BETTER_SCHEDULER_MAX_THREADS)
+                {
+                    KAutoObject *obj = (KAutoObject *)betterSchedulerRWLockShared.threads.thread[index];
+
+                    BetterSchedulerRemovePadding(&betterSchedulerRWLockShared.threads.thread[index]->padding, BETTER_SCHEDULER_DISABLE_SELECTION_MASK);
+                    betterSchedulerRWLockShared.threads.thread[index]->affinityMask = (1 << betterSchedulerRWLockShared.threads.thread[index]->coreId);
+                    obj->vtable->DecrementReferenceCount(obj);
+
+                    for(u8 k = (index + 1); k < betterSchedulerRWLockShared.threads.registeredThreads; k++)
+                        betterSchedulerRWLockShared.threads.thread[k - 1] = betterSchedulerRWLockShared.threads.thread[k];
+
+                    betterSchedulerRWLockShared.threads.thread[betterSchedulerRWLockShared.threads.registeredThreads - 1] = NULL;
+                    betterSchedulerRWLockShared.threads.registeredThreads--;
+                }
+
+                //Close handle and return.
+                KAutoObject *obj = (KAutoObject *)thread;
                 obj->vtable->DecrementReferenceCount(obj);
 
-                for(u8 k = (index + 1); k < betterSchedulerThreads.registeredThreads; k++)
-                    betterSchedulerThreads.thread[k - 1] = betterSchedulerThreads.thread[k];
-
-                betterSchedulerThreads.thread[betterSchedulerThreads.registeredThreads - 1] = NULL;
-                betterSchedulerThreads.registeredThreads--;
+                result = 0;//Successfully unregisterd or not registered.
             }
-
-            //Close handle and return.
-            KAutoObject *obj = (KAutoObject *)thread;
-            obj->vtable->DecrementReferenceCount(obj);
-
-            result = 0;//Successfully unregisterd or not registered.
+            else
+                result = 0;//Always return success for unregister request.
         }
-        else
-            result = 0;//Always return success for unregister request.
-
-        KRecursiveLock__Unlock(criticalSectionLock);
+        KRecursiveLock__Unlock((KRecursiveLock*)&betterSchedulerRWLockShared.lock);
     }
     else if(op == BETTER_SCHEDULER_DEBUG)
     {
@@ -555,12 +663,32 @@ Result BetterScheduler(u32 op, Handle threadHandle, u32 parameters)
     return result;
 }
 
+static void BetterSchedulerSetUpNoLockShared(void)
+{
+    betterSchedulerNoLockShared.numOfCores = getNumberOfCores();
+    betterSchedulerNoLockShared.numOfCores = ((betterSchedulerNoLockShared.numOfCores > BETTER_SCHEDULER_MAX_CORES) ? BETTER_SCHEDULER_MAX_CORES : betterSchedulerNoLockShared.numOfCores);
+
+    //Assign core priority (prefered core for cross-core context switch).
+    if(betterSchedulerNoLockShared.numOfCores == 2)
+    {
+        betterSchedulerNoLockShared.corePriority[0] = 0;//User core.
+        betterSchedulerNoLockShared.corePriority[1] = 1;//System core.
+    }
+    else if(betterSchedulerNoLockShared.numOfCores == 4)
+    {
+        betterSchedulerNoLockShared.corePriority[0] = 2;//User core.
+        betterSchedulerNoLockShared.corePriority[1] = 0;//User core.
+        betterSchedulerNoLockShared.corePriority[2] = 3;//System core.
+        betterSchedulerNoLockShared.corePriority[3] = 1;//System core.
+    }
+}
+
 static inline bool BetterSchedulerIsThreadRegistered(KThread *thread)
 {
     //Check if it's registered.
-    for(u8 i = 0; i < betterSchedulerThreads.registeredThreads; i++)
+    for(u8 i = 0; i < betterSchedulerRWLockShared.threads.registeredThreads; i++)
     {
-        if(betterSchedulerThreads.thread[i] == thread)
+        if(betterSchedulerRWLockShared.threads.thread[i] == thread)
             return true;
     }
 
@@ -570,9 +698,9 @@ static inline bool BetterSchedulerIsThreadRegistered(KThread *thread)
 static inline u8 BetterSchedulerGetThreadIndex(KThread *thread)
 {
     //Return thread index if exists.
-    for(u8 i = 0; i < betterSchedulerThreads.registeredThreads; i++)
+    for(u8 i = 0; i < betterSchedulerRWLockShared.threads.registeredThreads; i++)
     {
-        if(betterSchedulerThreads.thread[i] == thread)
+        if(betterSchedulerRWLockShared.threads.thread[i] == thread)
             return i;
     }
 
@@ -584,19 +712,19 @@ static void BetterSchedulerGetPriorityList(u8 numOfCores, u8 *highestPriorityPer
     for(u8 i = 0; i < numOfCores; i++)
     {
         //Get the priority for the thread that is currently running (or about to be executed).
-        u8 currentMaxPriority = betterSchedulerCurrentThreads[i]->dynamicPriority;
+        u8 currentMaxPriority = betterSchedulerRWLockShared.currentThreads[i]->dynamicPriority;
 
         //Get current maximum priority for the core including pending (switching) threads.
         for(u8 k = 0; k < numOfCores; k++)
         {
             for(u8 m = 0; m < BETTER_SCHEDULER_QUEUE_CAPACITY; m++)
             {
-                KThread *pendingThread = betterSchedulerTargetQueue[k][m].thread;
+                KThread *pendingThread = betterSchedulerRWLockShared.targetQueue[k][m].thread;
 
                 if(!pendingThread)
                     break;
 
-                if(betterSchedulerTargetQueue[k][m].targetCore == k)
+                if(betterSchedulerRWLockShared.targetQueue[k][m].targetCore == k)
                 {
                     //We also include pending threads.
                     //Lower number gives higher priority.
@@ -613,9 +741,9 @@ static void BetterSchedulerGetPriorityList(u8 numOfCores, u8 *highestPriorityPer
 static void BetterSchedulerCleanUpInvalidThreads(void)
 {
     //Clean up invalid threads.
-    for(u8 i = 0; i < betterSchedulerThreads.registeredThreads; i++)
+    for(u8 i = 0; i < betterSchedulerRWLockShared.threads.registeredThreads; i++)
     {
-        KThread *target = betterSchedulerThreads.thread[i];
+        KThread *target = betterSchedulerRWLockShared.threads.thread[i];
 
         if(!target)
             continue;
@@ -626,12 +754,11 @@ static void BetterSchedulerCleanUpInvalidThreads(void)
             obj->vtable->DecrementReferenceCount(obj);
 
             //Remove from the list.
-            for(u8 k = (i + 1); k < betterSchedulerThreads.registeredThreads; k++)
-                betterSchedulerThreads.thread[k - 1] = betterSchedulerThreads.thread[k];
+            for(u8 k = (i + 1); k < betterSchedulerRWLockShared.threads.registeredThreads; k++)
+                betterSchedulerRWLockShared.threads.thread[k - 1] = betterSchedulerRWLockShared.threads.thread[k];
 
-            betterSchedulerThreads.thread[betterSchedulerThreads.registeredThreads - 1] = NULL;
-            betterSchedulerThreads.registeredThreads--;
-            continue;
+            betterSchedulerRWLockShared.threads.thread[betterSchedulerRWLockShared.threads.registeredThreads - 1] = NULL;
+            betterSchedulerRWLockShared.threads.registeredThreads--;
         }
     }
 }
@@ -642,7 +769,7 @@ static bool BetterSchedulerCheckIsReady(u8 numOfCores)
 
     for(u8 i = 0; i < numOfCores; i++)
     {
-        if(!betterSchedulerEvents[i])
+        if(!betterSchedulerRWLockShared.events[i])
         {
             isSchedulerReady = false;
             break;
@@ -656,11 +783,12 @@ static KThread * BetterSchedulerFindTarget(u8 currentCore, u8 currentMaxPriority
 {
     KThread *finalTarget = NULL;
 
-    for(u8 i = 0; i < betterSchedulerThreads.registeredThreads; i++)
+    for(u8 i = 0; i < betterSchedulerRWLockShared.threads.registeredThreads; i++)
     {
-        KThread *target = betterSchedulerThreads.thread[i];
+        u8 padding = 0;
+        KThread *target = betterSchedulerRWLockShared.threads.thread[i];
 
-        if(betterSchedulerCurrentThreads[target->coreId] == target)
+        if(betterSchedulerRWLockShared.currentThreads[target->coreId] == target)
             continue;
 
         //We seek for the thread that wants to run (scheduled) but couldn't (because of other threads).
@@ -669,9 +797,10 @@ static KThread * BetterSchedulerFindTarget(u8 currentCore, u8 currentMaxPriority
         //2. Target thread is running.
         //3. Target thread is in SVC (trying to switch between cores here will cause crash).
         //4. Selection is disabled for target thread.
-        if((target->schedulingMask != 0x01) || ((target->padding & BETTER_SCHEDULER_RUNNING_MASK) == BETTER_SCHEDULER_RUNNING_MASK)
-        || ((target->padding & BETTER_SCHEDULER_IN_SVC_MASK) == BETTER_SCHEDULER_IN_SVC_MASK)
-        || ((target->padding & BETTER_SCHEDULER_DISABLE_SELECTION_MASK) == BETTER_SCHEDULER_DISABLE_SELECTION_MASK))
+        padding = BetterSchedulerReadPadding(&target->padding);
+        if((target->schedulingMask != 0x01) || ((padding & BETTER_SCHEDULER_RUNNING_MASK) == BETTER_SCHEDULER_RUNNING_MASK)
+        || ((padding & BETTER_SCHEDULER_IN_SVC_MASK) == BETTER_SCHEDULER_IN_SVC_MASK)
+        || ((padding & BETTER_SCHEDULER_DISABLE_SELECTION_MASK) == BETTER_SCHEDULER_DISABLE_SELECTION_MASK))
             continue;
 
         if((target->affinityMask & (1 << currentCore)) == 0)

@@ -145,8 +145,6 @@ void enterSvc(u8 svcId)
 {
     KThread *currentThread = currentCoreContext->objectContext.currentThread;
 
-    KRecursiveLock__Lock(criticalSectionLock);
-
     //We'll enter svc.
     BetterSchedulerUpdateInSvcFlag(currentThread, true);
 
@@ -156,8 +154,6 @@ void enterSvc(u8 svcId)
         //Remove us here since we are about to die.
         BetterSchedulerRemoveThread(currentThread);
     }
-
-    KRecursiveLock__Unlock(criticalSectionLock);
 }
 
 void leaveSvc(void)

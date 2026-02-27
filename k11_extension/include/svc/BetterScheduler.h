@@ -38,8 +38,8 @@
 #define BETTER_SCHEDULER_SET_AFFINITY_MASK  (u32)(0x00040010)   //Set thread affinity mask.
 #define BETTER_SCHEDULER_DEBUG              (u32)(0x000400FF)   //Debug.
 
-#define BETTER_SCHEDULER_FEATURE_NONE               (u32)(0x00000000)   //No features.
-#define BETTER_SCHEDULER_FEATURE_CROSS_CORE         (u32)(0x00000001)   //Cross-core context switch is supported.
+#define BETTER_SCHEDULER_FEATURE_NONE       (u32)(0x00000000)   //No features.
+#define BETTER_SCHEDULER_FEATURE_CROSS_CORE (u32)(0x00000001)   //Cross-core context switch is supported.
 
 void BetterSchedulerUpdateInSvcFlag(KThread *thread, bool inSvc);
 void BetterSchedulerRemoveThread(KThread* thread);
