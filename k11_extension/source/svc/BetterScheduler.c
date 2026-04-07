@@ -812,7 +812,7 @@ static KThread * BetterSchedulerFindTarget(u8 currentCore, u8 currentMaxPriority
             //Target thread doesn't like the core currently running on, skip core and priority check and continue.
             finalTarget = target;
             currentMaxPriority = finalTarget->dynamicPriority;
-            break;
+            continue;
         }
         else
         {
