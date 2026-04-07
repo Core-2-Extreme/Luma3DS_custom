@@ -162,10 +162,11 @@ static void BetterSchedulerSwitchCore(volatile KThread* target, KScheduler* curr
         {
             padding = (u8)__ldrex8((s8*)(&target->padding));
 
-            if((padding & BETTER_SCHEDULER_IN_SVC_MASK) == 0)
+            if((padding & BETTER_SCHEDULER_IN_SVC_MASK) == 0
+            && (target->schedulingMask == 0x00 || target->schedulingMask == 0x01))
             {
                 //Remove from scheduler.
-                if(target->schedulingMask != 0x00)
+                if(target->schedulingMask == 0x01)
                 {
                     target->schedulingMask = 0x00;
                     KScheduler__AdjustThread(currentScheduler, (KThread*)target, 0x01);
@@ -793,12 +794,12 @@ static KThread * BetterSchedulerFindTarget(u8 currentCore, u8 currentMaxPriority
 
         //We seek for the thread that wants to run (scheduled) but couldn't (because of other threads).
         //So, skip if at least one of them is true :
-        //1. Target thread is NOT scheduled (schedulingMask != 1).
+        //1. Target thread is NOT scheduled (schedulingMask == 0x00).
         //2. Target thread is running.
         //3. Target thread is in SVC (trying to switch between cores here will cause crash).
         //4. Selection is disabled for target thread.
         padding = BetterSchedulerReadPadding(&target->padding);
-        if((target->schedulingMask != 0x01) || ((padding & BETTER_SCHEDULER_RUNNING_MASK) == BETTER_SCHEDULER_RUNNING_MASK)
+        if((target->schedulingMask == 0x00) || ((padding & BETTER_SCHEDULER_RUNNING_MASK) == BETTER_SCHEDULER_RUNNING_MASK)
         || ((padding & BETTER_SCHEDULER_IN_SVC_MASK) == BETTER_SCHEDULER_IN_SVC_MASK)
         || ((padding & BETTER_SCHEDULER_DISABLE_SELECTION_MASK) == BETTER_SCHEDULER_DISABLE_SELECTION_MASK))
             continue;
