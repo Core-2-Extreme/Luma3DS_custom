@@ -502,6 +502,36 @@ static bool backupEssentialFiles(void)
     return ok;
 }
 
+bool getFreeSpace(const char *path, u64* out_size, u32* out_clusters)
+{
+    DWORD free_clusters = 0;
+    FATFS* fs = NULL;
+
+    // todo: verify both paths.
+    if (!strncmp(path, "sdmc:", strlen("sdmc:")))
+    {
+        fs = &sdFs;
+    }
+    else if (!strncmp(path, "nand:", strlen("nand:")))
+    {
+        fs = &nandFs;
+    }
+    else
+    {
+        return false;
+    }
+
+    if (FR_OK != f_getfree(path, &free_clusters, &fs))
+    {
+        return false;
+    }
+
+    if (out_size) *out_size = (u64)free_clusters * (u64)fs->csize;
+    if (out_clusters) *out_clusters = free_clusters;
+
+    return true;
+}
+
 bool doLumaUpgradeProcess(void)
 {
     bool ok = true, ok2 = true;
