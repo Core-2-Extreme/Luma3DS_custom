@@ -62,7 +62,7 @@ typedef struct MenuItem {
 typedef struct Menu {
     const char *title;
 
-    MenuItem items[24];
+    MenuItem items[25];
 } Menu;
 
 extern u32 menuCombo;
@@ -94,6 +94,7 @@ u32 menuCountItems(const Menu *menu);
 MyThread *menuCreateThread(void);
 void    menuEnter(void);
 void    menuLeave(void);
+void    menuRequestClose(void);
 void    menuThreadMain(void);
 void    menuShow(Menu *root);
 void    DispMessage(const char *title, const char *message);

@@ -55,6 +55,7 @@ Menu rosalinaMenu = {
         { "System configuration...", MENU, .menu = &sysconfigMenu },
         { "Miscellaneous options...", MENU, .menu = &miscellaneousMenu },
         { "Save settings", METHOD, .method = &RosalinaMenu_SaveSettings },
+        { "Return To HOME Menu", METHOD, .method = &RosalinaMenu_ReturnToHomeMenu },
         { "Power off / reboot", METHOD, .method = &RosalinaMenu_PowerOffOrReboot },
         { "System info", METHOD, .method = &RosalinaMenu_ShowSystemInfo },
         { "Credits", METHOD, .method = &RosalinaMenu_ShowCredits },
@@ -227,7 +228,7 @@ void RosalinaMenu_ShowCredits(void)
         Draw_Lock();
         Draw_DrawString(10, 10, COLOR_TITLE, "Rosalina -- Luma3DS credits");
 
-        u32 posY = Draw_DrawString(10, 30, COLOR_WHITE, "Luma3DS (c) 2016-2025 AuroraWright, TuxSH") + SPACING_Y;
+        u32 posY = Draw_DrawString(10, 30, COLOR_WHITE, "Luma3DS (c) 2016-2026 LumaTeam") + SPACING_Y;
 
         posY = Draw_DrawString(10, posY + SPACING_Y, COLOR_WHITE, "3DSX loading code by fincs");
         posY = Draw_DrawString(10, posY + SPACING_Y, COLOR_WHITE, "Networking code & basic GDB functionality by Stary");
@@ -273,7 +274,8 @@ static Result RosalinaMenu_WriteScreenshot(IFile *file, u32 width, bool top, boo
 
     u8 *buf = framebufferCache;
     Draw_CreateBitmapHeader(framebufferCache, width, numLinesScaled);
-    buf += 54;
+    const u32 headerSize = 0x40;
+    buf += headerSize;
 
     u32 y = 0;
     // Our buffer might be smaller than the size of the screenshot...
@@ -287,7 +289,7 @@ static Result RosalinaMenu_WriteScreenshot(IFile *file, u32 width, bool top, boo
 
         s64 t1 = svcGetSystemTick();
         timeSpentConvertingScreenshot += t1 - t0;
-        TRY(IFile_Write(file, &total, framebufferCache, (y == 0 ? 54 : 0) + lineSize * nlines * scaleFactorY, 0)); // don't forget to write the header
+        TRY(IFile_Write(file, &total, framebufferCache, (y == 0 ? headerSize : 0) + lineSize * nlines * scaleFactorY, 0)); // don't forget to write the header
         timeSpentWritingScreenshot += svcGetSystemTick() - t1;
 
         y += nlines;
@@ -298,6 +300,35 @@ static Result RosalinaMenu_WriteScreenshot(IFile *file, u32 width, bool top, boo
 
     Draw_FreeFramebufferCache();
     return res;
+}
+
+void RosalinaMenu_ReturnToHomeMenu(void)
+{
+    Draw_Lock();
+    Draw_ClearFramebuffer();
+    Draw_FlushFramebuffer();
+    Draw_Unlock();
+
+    do
+    {
+        Draw_Lock();
+        Draw_DrawString(10, 10, COLOR_TITLE, "Return to HOME Menu");
+        Draw_DrawString(10, 30, COLOR_WHITE, "Press A to confirm.\nPress B to go back.");
+        Draw_FlushFramebuffer();
+        Draw_Unlock();
+
+        u32 pressed = waitInputWithTimeout(1000);
+
+        if(pressed & KEY_A)
+        {
+            srvPublishToSubscriber(0x204, 0);
+            menuRequestClose();
+            return;
+        }
+        else if(pressed & KEY_B)
+            return;
+    }
+    while(!menuShouldExit);
 }
 
 void RosalinaMenu_TakeScreenshot(void)

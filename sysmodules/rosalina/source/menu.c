@@ -196,6 +196,7 @@ u32 waitCombo(void)
 
 static MyThread menuThread;
 static u8 CTR_ALIGN(8) menuThreadStack[0x3000];
+static bool menuCloseRequested = false;
 
 static float batteryPercentage;
 static float batteryVoltage;
@@ -400,6 +401,7 @@ void menuEnter(void)
     Draw_Lock();
     if(!menuShouldExit && menuRefCount == 0)
     {
+        menuCloseRequested = false;
         menuRefCount++;
         svcKernelSetState(0x10000, 2 | 1);
         svcSleepThread(5 * 1000 * 100LL);
@@ -428,6 +430,11 @@ void menuLeave(void)
         svcKernelSetState(0x10000, 2 | 1);
     }
     Draw_Unlock();
+}
+
+void menuRequestClose(void)
+{
+    menuCloseRequested = true;
 }
 
 static void menuDraw(Menu *menu, u32 selected)
@@ -498,9 +505,9 @@ static void menuDraw(Menu *menu, u32 selected)
         Draw_DrawFormattedString(SCREEN_BOT_WIDTH - 10 - SPACING_X * 19, SCREEN_BOT_HEIGHT - 20, COLOR_WHITE, "%19s", "");
 
     if(isRelease)
-        Draw_DrawFormattedString(10, SCREEN_BOT_HEIGHT - 30, COLOR_TITLE, "Luma3DS_fs_patch \n(based on %s)", versionString);
+        Draw_DrawFormattedString(10, SCREEN_BOT_HEIGHT - 30, COLOR_TITLE, "Luma3DS_fs_patch (v1.2) \n(based on %s)", versionString);
     else
-        Draw_DrawFormattedString(10, SCREEN_BOT_HEIGHT - 30, COLOR_TITLE, "Luma3DS_fs_patch \n(based on %s) %08lx", versionString, commitHash);
+        Draw_DrawFormattedString(10, SCREEN_BOT_HEIGHT - 30, COLOR_TITLE, "Luma3DS_fs_patch (v1.2) \n(based on %s) %08lx", versionString, commitHash);
 
     Draw_FlushFramebuffer();
 }
@@ -516,6 +523,8 @@ void menuShow(Menu *root)
     u32 numItems = menuCountItems(currentMenu);
     if (menuItemIsHidden(&currentMenu->items[selectedItem]))
         selectedItem = menuAdvanceCursor(selectedItem, numItems, 1);
+
+    menuCloseRequested = false;
 
     Draw_Lock();
     Draw_ClearFramebuffer();
@@ -563,6 +572,9 @@ void menuShow(Menu *root)
                     break;
             }
 
+            if (menuCloseRequested)
+                break;
+
             Draw_Lock();
             Draw_ClearFramebuffer();
             Draw_FlushFramebuffer();
@@ -597,5 +609,5 @@ void menuShow(Menu *root)
         menuDraw(currentMenu, selectedItem);
         Draw_Unlock();
     }
-    while(!menuShouldExit);
+    while(!menuShouldExit && !menuCloseRequested);
 }

@@ -622,52 +622,83 @@ u32 patchKernel9Fs(u8 *pos, u32 size)
 {
     // todo: check pattern for every fw.
     static const u8 pattern[] = {  0x00, 0xF0, 0x82, 0xFA, 0x00, 0x28, 0xAC, 0xD0, };
+    bool apply_patch = false;
     u16* off = (u16 *)memsearch(pos, pattern, size, sizeof(pattern));
 
-    // todo: check pattern for every fw.
-    static const u8 pattern2[] = { 0x70, 0xb5, 0x00, 0x24, 0xa8, 0x21, 0x0c, 0x50, 0xc1, 0x6a, 0x03, 0x29, 0x0b, 0xd0, 0x05, 0x00, 0x00, 0xf0, 0x0c, 0xff };
-    u16* off2 = (u16 *)memsearch(pos, pattern2, size, sizeof(pattern2));
+//     // todo: check pattern for every fw.
+//     static const u8 pattern2[] = { 0x70, 0xb5, 0x00, 0x24, 0xa8, 0x21, 0x0c, 0x50, 0xc1, 0x6a, 0x03, 0x29, 0x0b, 0xd0, 0x05, 0x00, 0x00, 0xf0, 0x0c, 0xff };
+//     u16* off2 = (u16 *)memsearch(pos, pattern2, size, sizeof(pattern2));
 
-    if (!off) {
-        warn("Failed to find fs cluster pattern1");
-    }
-    else if (!off2) {
-        warn("Failed to find fs cluster pattern2");
-    }
-    else {
-        u32 free_clusters;
-        if (!getFreeSpace("sdmc:", NULL, &free_clusters)) {
-            warn("FatFS failed to get free clusters...");
-        }
-        else {
-            const char* msg = "This patch speeds up boot speed significantly\n"
-            "for someone who has high capacity SD card\n"
-            "(especially noticeable for 64GB+).\n\n"
-            "Please note :\n"
-            "This is beta version so it may contain bugs.\n"
-            "To reduce the risk, back up important files and\n"
-            "refrain from dangerous activities (such as\n"
-            "updating system FW).\n"
-            "Accept the risk to apply this patch.\n\n"
-            "Patch point : 0x%08X\n"
-            "If the value above is 0x00000000 the patch isn't\n"
-            "available for your console, if so let us know!";
+//     if (!off) {
+//         warn("Failed to find fs cluster pattern1");
+//     }
+//     else if (!off2) {
+//         warn("Failed to find fs cluster pattern2");
+//     }
+//     else {
+//         u32 free_clusters;
+//         if (!getFreeSpace("sdmc:", NULL, &free_clusters)) {
+//             warn("FatFS failed to get free clusters...");
+//         }
+//         else {
+//             const char* msg = "This patch speeds up boot speed significantly\n"
+//             "for someone who has high capacity SD card\n"
+//             "(especially noticeable for 64GB+).\n\n"
+//             "Please note :\n"
+//             "This is beta version so it may contain bugs.\n"
+//             "To reduce the risk, back up important files and\n"
+//             "refrain from dangerous activities (such as\n"
+//             "updating system FW).\n"
+//             "Accept the risk to apply this patch.\n\n"
+//             "Patch point : 0x%08X\n"
+//             "If the value above is 0x00000000 the patch isn't\n"
+//             "available for your console, if so let us know!";
 
-            if(warn(msg, (uintptr_t)off) && off)
-            {
-                // nop the cmp and beq.
-                off[2] = 0x0000;//movs r0, r0 (aka "nop")
-                off[3] = 0x0000;//movs r0, r0 (aka "nop")
+//             if(warn(msg, (uintptr_t)off) && off)
+//             {
+//                 // nop the cmp and beq.
+//                 off[2] = 0x0000;//movs r0, r0 (aka "nop")
+//                 off[3] = 0x0000;//movs r0, r0 (aka "nop")
 
-                // patch the jump location to write the free cluster count.
-                off2[0] = 0x4901;//ldr r1, [pc, #4]
-                off2[1] = 0x3038;//adds r0, r0, 0x38
-                off2[2] = 0x6701;//str r1, [r0, #0x70]
-                off2[3] = 0x4770;//bx lr
-                off2[4] = free_clusters & 0xFFFF;
-                off2[5] = free_clusters >> 16;
-            }
-        }
+//                 // patch the jump location to write the free cluster count.
+//                 off2[0] = 0x4901;//ldr r1, [pc, #4]
+//                 off2[1] = 0x3038;//adds r0, r0, 0x38
+//                 off2[2] = 0x6701;//str r1, [r0, #0x70]
+//                 off2[3] = 0x4770;//bx lr
+//                 off2[4] = free_clusters & 0xFFFF;
+//                 off2[5] = free_clusters >> 16;
+//             }
+//         }
+    const char* msg = "This patch speeds up boot speed significantly\n"
+    "for someone who has high capacity SD card\n"
+    "(especially noticeable for 64GB+).\n\n"
+    "Please note:\n"
+    "This is beta version so it may contain bugs.\n"
+    "To reduce the risk, back up important files and\n"
+    "refrain from dangerous activities (such as\n"
+    "updating system FW).\n"
+    "Accept the risk to apply this patch.\n\n"
+    "Patch point: 0x%08X\n"
+    "If the value shown above equals 0x00000000 the\n"
+    "patch isn't available for your console, if so\n"
+    "let us know!";
+    const char* bottom_msg = "You can hide this warning by enabling\n"
+    "'Hide SD card boot time patch warning'\n"
+    "on Luma3DS configuration menu.\n\n"
+    "Note: Hold SELECT while powering ON\n"
+    "your console to open the configuration\n"
+    "menu.";
+
+    apply_patch = CONFIG(HIDESDPATCHWARNING);//Apply patch without showing warning if configured so.
+    if(!apply_patch)
+        apply_patch = warn(bottom_msg, msg, (uintptr_t)off);//Or ask user what to do.
+
+    if(apply_patch && off)
+    {
+        off[0] = 0x3038;//adds r0, r0, 0x38
+        off[1] = 0x6801;//ldr r1, [r0]
+        off[2] = 0x6701;//str r1, [r0, #0x70]
+        off[3] = 0x0000;//movs r0, r0 (aka "nop")
     }
 
     //Allow booting without this patch for now.
@@ -902,6 +933,24 @@ u32 patchLgyK11(u8 *section1, u32 section1Size, u8 *section2, u32 section2Size)
         return 1;
     *off2 = 0xE01A;
 
+    // Patch kernelpanic to skip devunit check, so that it sets the LCD fill regs
+    // which are useful to detect such panics
+    u16 *off3;
+    for (off3 = (u16 *)section1; (u8 *)off3 <= section1 + section1Size && (off3[0] != 0x481D || off3[1] != 0xB570); off3++);
+    if ((u8 *)off3 >= section1 + section1Size)
+        return 1;
+    off3[2] = 0x2001; // movs r0, #1
+
+    // Patch kernel to avoid allocating the two "configuration memory" pages, freeing
+    // 0x2000 bytes of kernel "heap" (which is 0xD000 AXIWRAM bytes on LGY K11 instead
+    // of the entire FCRAM on NFIRM). This is indeed a bug because if prevents two of the
+    // 12 KThread objects from being created
+    u16 *off4;
+    for (off4 = (u16 *)section1; (u8 *)off4 <= section1 + section1Size && (off4[0] != 0xB570 || off4[1] != 0x2200); off4++);
+    if ((u8 *)off4 >= section1 + section1Size)
+        return 1;
+    *off4 = 0x4770; // bx lr
+
     return 0;
 }
 
@@ -919,7 +968,7 @@ u32 patchProtoNandSignatureCheck(u8 *pos, u32 size) {
         off[0x20] = 2;
     }
 
-    else if (firmProtoVersion == 238) { // SDK 0.10
+    else if (firmProtoVersion == 238 || firmProtoVersion == 236) { // SDK 0.10.0 (early 0.10.0) and SDK 0.10.2
         // Same patch as for v243 ported to the different ncsd_read() function
         static const u8 pattern[] = {
             0x00, 0x11, 0x9f, 0xe5,
@@ -932,8 +981,107 @@ u32 patchProtoNandSignatureCheck(u8 *pos, u32 size) {
 
         off[0x20] = 2;
     }
+    
+    else if (firmProtoVersion == 1200) { // SDK 0.12
+        // Same patch as for v238 and v243 ported to the different ncsd_read() function
+        static const u8 pattern[] = {
+            0x4C, 0x10, 0x9F, 0xE5,
+            0x4C, 0x50, 0x9F, 0xE5,
+        };
+    
+        u8 *off = memsearch(pos, pattern, size, sizeof(pattern));
+        if (!off)
+            return 1;
+    
+        off[0x20] = 2;
+                    
+        static const u8 pattern_sigcheck[] = {
+            0x33, 0x10, 0xa0, 0xe3, // mov r1, #0x33
+        };
+        u32* off2 = (u32*)memsearch(pos, pattern_sigcheck, size, sizeof(pattern_sigcheck));
+        if (!off2) return 1;
+        for (; off2 < (u32*)&pos[size] && off2[0] != 0xD8E003FF; off2++) {}
+        if (off2 >= (u32*)&pos[size]) return 1;
+        off2[0] = 0; // patch failing result to success.
+
+    }
 
     else return 1;
 
+    return 0;
+}
+
+static u32 patchSingleInstruction(u8 *pos, u32 size, void *pattern, u32 patternSize, s32 offset, u32 newInsn, u8 **out_pos) {
+    u32 *off = (u32 *)memsearch(pos, pattern, size, patternSize);
+    if (!off) return 1;
+    *out_pos = (u8 *)off;
+    off += offset;
+    *off = newInsn;
+    return 0;
+}
+
+u32 patchProtoUnitinfo1200(u8 *pos, u32 size, u8 *arm9Section, u32 arm9SectionSize) {
+    u8 *tmp_pos = NULL;
+    u8 pattern0[] = { 0x64, 0x10, 0x9F, 0xE5,   /* LDR R1, #0x10010000 */
+                      0x10, 0x30, 0xD1, 0xE5 }; /* LDRB R3, [R1, #0x10] */
+    if (patchSingleInstruction(pos, size, pattern0, sizeof(pattern0), +1, 0xE3A03001, &tmp_pos)) /* mov r3, #1 */
+        return 1;
+    
+    u8 pattern1[] = { 0x10, 0x00, 0x9F, 0xE5,   /* LDR R0, #0x10010000 */
+                      0x10, 0x00, 0xD0, 0xE5 }; /* LRDB R0, [R0, #0x10] */
+    if (patchSingleInstruction(pos, size, pattern1, sizeof(pattern1), +1, 0xE3A00001, &tmp_pos)) /* mov r0, #1 */
+        return 1;
+    tmp_pos += 8;
+    /* there are two of these */
+    if (patchSingleInstruction(tmp_pos, size, pattern1, sizeof(pattern1), +1, 0xE3A00001, &tmp_pos)) /* mov r0, #1 */
+        return 1;
+    
+    u8 pattern2[] = { 0xB8, 0x00, 0x9F, 0xE5,   /* LDR R0, #0x10010000 */
+                      0x10, 0x00, 0xD0, 0xE5 }; /* LDRB R0, [R0, #0x10] */
+    if (patchSingleInstruction(pos, size, pattern2, sizeof(pattern2), +1, 0xE3A00001, &tmp_pos)) /* mov r0, #1 */
+        return 1;
+    
+    u8 pattern3[] = { 0x03, 0x50, 0x04, 0xE2,   /* AND R5, R4, #3 */
+                      0x10, 0x10, 0xD0, 0xE5 }; /* LDRB R1, [R0, #0x10] */
+    if (patchSingleInstruction(pos, size, pattern3, sizeof(pattern3), +1, 0xE3A01001, &tmp_pos)) /* mov r1, #1 */
+        return 1;
+    
+    u8 pattern4[] = { 0x97, 0x00, 0x00, 0x1A,   /* BNE #0x8050D8C */
+                      0x10, 0x00, 0xD0, 0xE5 }; /* LDRB R0, [R0, #0x10] */
+    if (patchSingleInstruction(pos, size, pattern4, sizeof(pattern4), +1, 0xE3A00001, &tmp_pos)) /* mov r0, #1 */
+        return 1;
+    
+    u8 pattern5[] = { 0x20, 0x01, 0x9F, 0x15,   /* LDRNE R0, #0x10010000 */
+                      0x10, 0x00, 0xD0, 0x15 }; /* LDRBNE R0, [R0, #0x10] */
+    if (patchSingleInstruction(pos, size, pattern5, sizeof(pattern5), +1, 0xE3A00001, &tmp_pos)) /* mov r0, #1 */
+        return 1;
+    
+    u8 pattern6[] = { 0x10, 0x40, 0x2D, 0xE9,   /* PUSH {R4, LR} */
+                      0x10, 0x00, 0xD1, 0xE5 }; /* LDRB R0, [R1, #0x10] */
+    if (patchSingleInstruction(pos, size, pattern6, sizeof(pattern6), +1, 0xE3A00001, &tmp_pos)) /* mov r0, #1 */
+        return 1;
+    
+    u8 pattern7[] = { 0x24, 0xD0, 0x4D, 0xE2,   /* SUB SP, SP, #0x24 */
+                      0x10, 0x00, 0xD0, 0xE5 }; /* LDRB R0, [R0, #0x10] */
+    if (patchSingleInstruction(pos, size, pattern7, sizeof(pattern7), +1, 0xE3A00001, &tmp_pos)) /* mov r0, #1 */
+        return 1;
+    
+    u8 pattern8[] = { 0x01, 0x00, 0x50, 0xE1,   /* CMP R0, R1 */
+                      0xB8, 0xA4, 0xFF, 0x1B }; /* BLNE svcBreak */
+    if (patchSingleInstruction(pos, size, pattern8, sizeof(pattern8), +1, 0xE320F000, &tmp_pos)) /* mov r0, #1 */
+        return 1;
+    
+    /* k9 sync function, sends unitinfo to k11(?) */
+    u8 syncpattern[] = {
+        0x09, 0x00, 0x00, 0x1A, /* BNE 0x808E7A0 */
+        0x10, 0x30, 0xDC, 0xE5, /* LDRB R3, [R12, #0x10] */
+        0x01, 0x00, 0x53, 0xE3  /* CMP R3, #1 */
+    };
+                                        
+    u8 *syncaddr = memsearch(arm9Section, syncpattern, arm9SectionSize, sizeof(syncpattern));
+    if (!syncaddr) return 1;
+    syncaddr += 4;
+    *(u32 *)syncaddr = 0xE3A03001; /* MOV R3, #1 */
+    
     return 0;
 }

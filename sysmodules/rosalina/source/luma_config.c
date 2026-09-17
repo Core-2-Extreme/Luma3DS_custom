@@ -170,6 +170,7 @@ static size_t LumaConfig_SaveLumaIniConfigToStr(char *out, const CfgData *cfg)
         (int)CONFIG(AUTOBOOTEMU), (int)CONFIG(LOADEXTFIRMSANDMODULES),
         (int)CONFIG(PATCHGAMES), (int)CONFIG(REDIRECTAPPTHREADS),
         (int)CONFIG(PATCHVERSTRING), (int)CONFIG(SHOWGBABOOT),
+        (int)CONFIG(HIDESDPATCHWARNING),
 
         1 + (int)MULTICONFIG(DEFAULTEMU), 4 - (int)MULTICONFIG(BRIGHTNESS),
         splashPosStr, (unsigned int)cfg->splashDurationMsec,
@@ -204,7 +205,7 @@ void LumaConfig_RequestSaveSettings(void) {
 
 Result LumaConfig_SaveSettings(void)
 {
-    char inibuf[0x2000];
+    char inibuf[0x2000 + 0x400]; // eyeballed. TODO use #embed
 
     Result res;
 
@@ -259,9 +260,15 @@ Result LumaConfig_SaveSettings(void)
     configData.autobootCtrAppmemtype = autobootCtrAppmemtype;
 
     size_t n = LumaConfig_SaveLumaIniConfigToStr(inibuf, &configData);
+
+    // FIXME: this is UB we should port snprintf sometime (as well as fix other tech debt in Rosalina)
+    if (n + 1 >= sizeof(inibuf)) {
+        __builtin_trap();
+    }
+
     FS_ArchiveID archiveId = isSdMode ? ARCHIVE_SDMC : ARCHIVE_NAND_RW;
     if (n > 0)
-        res = IFile_Open(&file, archiveId, fsMakePath(PATH_EMPTY, ""), fsMakePath(PATH_ASCII, "/luma/config.ini"), FS_OPEN_CREATE | FS_OPEN_WRITE);
+        res = IFile_Open(&file, archiveId, fsMakePath(PATH_EMPTY, ""), fsMakePath(PATH_ASCII, "/luma/config_fs_patch.ini"), FS_OPEN_CREATE | FS_OPEN_WRITE);
     else
         res = -1;
 
