@@ -620,56 +620,10 @@ u32 patchP9AccessChecks(u8 *pos, u32 size)
 
 u32 patchKernel9Fs(u8 *pos, u32 size)
 {
-    // todo: check pattern for every fw.
-    static const u8 pattern[] = {  0x00, 0xF0, 0x82, 0xFA, 0x00, 0x28, 0xAC, 0xD0, };
+    static const u8 pattern[] = { 0x02, 0x98, 0x00, 0x68, 0x00, 0x01, 0x03, 0x98, 0x13, 0xD0, 0x00, 0x28, };
     bool apply_patch = false;
     u16* off = (u16 *)memsearch(pos, pattern, size, sizeof(pattern));
-
-//     // todo: check pattern for every fw.
-//     static const u8 pattern2[] = { 0x70, 0xb5, 0x00, 0x24, 0xa8, 0x21, 0x0c, 0x50, 0xc1, 0x6a, 0x03, 0x29, 0x0b, 0xd0, 0x05, 0x00, 0x00, 0xf0, 0x0c, 0xff };
-//     u16* off2 = (u16 *)memsearch(pos, pattern2, size, sizeof(pattern2));
-
-//     if (!off) {
-//         warn("Failed to find fs cluster pattern1");
-//     }
-//     else if (!off2) {
-//         warn("Failed to find fs cluster pattern2");
-//     }
-//     else {
-//         u32 free_clusters;
-//         if (!getFreeSpace("sdmc:", NULL, &free_clusters)) {
-//             warn("FatFS failed to get free clusters...");
-//         }
-//         else {
-//             const char* msg = "This patch speeds up boot speed significantly\n"
-//             "for someone who has high capacity SD card\n"
-//             "(especially noticeable for 64GB+).\n\n"
-//             "Please note :\n"
-//             "This is beta version so it may contain bugs.\n"
-//             "To reduce the risk, back up important files and\n"
-//             "refrain from dangerous activities (such as\n"
-//             "updating system FW).\n"
-//             "Accept the risk to apply this patch.\n\n"
-//             "Patch point : 0x%08X\n"
-//             "If the value above is 0x00000000 the patch isn't\n"
-//             "available for your console, if so let us know!";
-
-//             if(warn(msg, (uintptr_t)off) && off)
-//             {
-//                 // nop the cmp and beq.
-//                 off[2] = 0x0000;//movs r0, r0 (aka "nop")
-//                 off[3] = 0x0000;//movs r0, r0 (aka "nop")
-
-//                 // patch the jump location to write the free cluster count.
-//                 off2[0] = 0x4901;//ldr r1, [pc, #4]
-//                 off2[1] = 0x3038;//adds r0, r0, 0x38
-//                 off2[2] = 0x6701;//str r1, [r0, #0x70]
-//                 off2[3] = 0x4770;//bx lr
-//                 off2[4] = free_clusters & 0xFFFF;
-//                 off2[5] = free_clusters >> 16;
-//             }
-//         }
-    const char* msg = "This patch speeds up boot speed significantly\n"
+    static const char* top_msg = "This patch speeds up boot speed significantly\n"
     "for someone who has high capacity SD card\n"
     "(especially noticeable for 64GB+).\n\n"
     "Please note:\n"
@@ -682,23 +636,49 @@ u32 patchKernel9Fs(u8 *pos, u32 size)
     "If the value shown above equals 0x00000000 the\n"
     "patch isn't available for your console, if so\n"
     "let us know!";
-    const char* bottom_msg = "You can hide this warning by enabling\n"
+    static const char* bottom_msg = "You can hide this warning by enabling\n"
     "'Hide SD card boot time patch warning'\n"
     "on Luma3DS configuration menu.\n\n"
     "Note: Hold SELECT while powering ON\n"
     "your console to open the configuration\n"
     "menu.";
+    static const char* calc_top_msg = "Calculating the free space on your SD card...\n"
+    "This may take a few minutes depending on your\n"
+    "SD card size, and your 3DS will automatically\n"
+    "boot after this calculation!!\n\n"
+    "This is done only once (on this SD card)\n"
+    "unless you manually trigger recalculation in:\n"
+    "Luma3DS menu -> 'System configuration' ->\n"
+    "'Recalculate free SD space on next boot'.";
 
     apply_patch = CONFIG(HIDESDPATCHWARNING);//Apply patch without showing warning if configured so.
     if(!apply_patch)
-        apply_patch = warn(bottom_msg, msg, (uintptr_t)off);//Or ask user what to do.
+        apply_patch = warn(bottom_msg, top_msg, (uintptr_t)off);//Or ask user what to do.
 
     if(apply_patch && off)
     {
-        off[0] = 0x3038;//adds r0, r0, 0x38
-        off[1] = 0x6801;//ldr r1, [r0]
-        off[2] = 0x6701;//str r1, [r0, #0x70]
-        off[3] = 0x0000;//movs r0, r0 (aka "nop")
+        u32 free_clusters = 0;
+
+        //Recalculate the free cluster count if the cache doesn't exist (or invalid).
+        if(fileRead(&free_clusters, "fs_patch_free_cache.ini", sizeof(free_clusters)) != sizeof(free_clusters))
+        {
+            //Display message then calculate free space.
+            info("", calc_top_msg);
+            if(getFreeSpace(&free_clusters))
+                fileWrite(&free_clusters, "fs_patch_free_cache.ini", sizeof(free_clusters));
+            else
+                free_clusters = 0;
+        }
+
+        off[0] = 0x4803;//ldr r0, [pc, #0x0C]
+        off[1] = 0x9006;//str r0, [sp, #0x18]
+        off[2] = 0x0021;//movs r1, r4
+        off[3] = 0x3138;//adds r1, r1, 0x38
+        off[4] = 0x6708;//str r0, [r1, #0x70]
+        off[5] = 0xE011;//b #0x26
+        //off[6] = Padding.
+        off[7] = (free_clusters & 0xFFFF);
+        off[8] = (free_clusters >> 16);
     }
 
     //Allow booting without this patch for now.

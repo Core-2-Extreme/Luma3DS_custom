@@ -191,6 +191,21 @@ bool warn(const char *bottom_msg, const char *fmt, ...)
     }
 }
 
+void info(const char *bottom_msg, const char *fmt, ...)
+{
+    char buf[DRAW_MAX_FORMATTED_STRING_SIZE + 1];
+
+    va_list args;
+    va_start(args, fmt);
+    vsprintf(buf, fmt, args);
+    va_end(args);
+
+    initScreens();
+    drawString(true, 10, 10, COLOR_WHITE, buf);
+
+    drawString(false, 10, 10, COLOR_GREEN, bottom_msg);
+}
+
 // CRC-16/MODBUS
 u16 crc16(const void *data, size_t size, u16 initialValue)
 {

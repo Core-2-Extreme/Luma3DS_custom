@@ -44,6 +44,7 @@ Menu sysconfigMenu = {
         { "Toggle Power Button", METHOD, .method=&SysConfigMenu_TogglePowerButton },
         { "Toggle power to card slot", METHOD, .method=&SysConfigMenu_ToggleCardIfPower},
         { "Change screen brightness", METHOD, .method = &SysConfigMenu_ChangeScreenBrightness },
+        { "Recalculate free SD space on next boot", METHOD, .method = &SysConfigMenu_ScheduleSdSpaceCalculation },
         {},
     }
 };
@@ -648,4 +649,70 @@ void SysConfigMenu_ChangeScreenBrightness(void)
         Draw_SetupFramebuffer();
 
     Draw_Unlock();
+}
+
+void SysConfigMenu_ScheduleSdSpaceCalculation(void)
+{
+    bool is_scheduled = false;
+
+    Draw_Lock();
+    Draw_ClearFramebuffer();
+    Draw_FlushFramebuffer();
+    Draw_Unlock();
+
+    do
+    {
+        u32 posY = 30;
+        u32 pressed = 0;
+
+        Draw_Lock();
+        Draw_DrawString(10, 10, COLOR_TITLE, "System configuration menu");
+        posY = Draw_DrawString(10, posY, COLOR_WHITE, "Press A to schedule free SD space calculation\non next boot, B to cancel.\n\n");
+
+        posY = Draw_DrawString(10, posY, COLOR_LIME, "Note:\n");
+        posY = Draw_DrawString(10, posY, COLOR_WHITE, "If you schedule the calculation,\nyour 3DS will take longer to boot next time.");
+        Draw_FlushFramebuffer();
+        Draw_Unlock();
+
+        pressed = waitInputWithTimeout(1000);
+
+        if (pressed & KEY_A)
+        {
+            IFile file = { 0, };
+            Result res = IFile_Open(&file, ARCHIVE_SDMC, fsMakePath(PATH_EMPTY, ""), fsMakePath(PATH_ASCII, "/luma/fs_patch_free_cache.ini"), FS_OPEN_WRITE);
+
+            if(R_SUCCEEDED(res))
+                res = IFile_SetSize(&file, 0);
+
+            IFile_Close(&file);
+            is_scheduled = true;
+            break;
+        }
+
+        if (pressed & KEY_B)
+            break;
+    }
+    while (!menuShouldExit);
+
+    if(is_scheduled)
+    {
+        u32 pressed = 0;
+
+        Draw_Lock();
+        Draw_ClearFramebuffer();
+        Draw_FlushFramebuffer();
+        Draw_Unlock();
+
+        do
+        {
+            Draw_Lock();
+            Draw_DrawString(10, 10, COLOR_TITLE, "System configuration menu");
+            Draw_DrawString(10, 30, COLOR_LIME, "Reboot your 3DS whenever it's convenient for you.\nPress any key to close.");
+            Draw_FlushFramebuffer();
+            Draw_Unlock();
+
+            pressed = waitInputWithTimeout(1000);
+        }
+        while (pressed == 0 && !menuShouldExit);
+    }
 }
